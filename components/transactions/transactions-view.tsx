@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useBudgetStore } from "@/lib/store/budget-store";
 import { MoneyText } from "@/components/shared/money-text";
 import { formatDisplayDate, toISODate } from "@/lib/dates";
-import { parseMoneyInput } from "@/lib/money";
+import { parseMoneyInput, sumCents } from "@/lib/money";
 import { ImportWizard } from "@/components/imports/import-wizard";
 import { ImportPrompt } from "@/components/imports/import-prompt";
 import { getActiveAccounts, isAccountClosed } from "@/lib/accounts/lifecycle";
@@ -22,6 +22,7 @@ import {
 import { suggestCategoryForPayeeSelection } from "@/lib/payees/catalog";
 import { SortableHeader } from "@/components/transactions/sort-header";
 import { SortMenu } from "@/components/transactions/sort-menu";
+import { DateRangeFilter } from "@/components/transactions/date-range-filter";
 import {
   DEFAULT_ALL_TRANSACTIONS_SORT,
   buildSortContext,
@@ -31,6 +32,15 @@ import {
   type TransactionSortField,
 } from "@/lib/transactions/sort";
 import { getSortCriteriaForScope } from "@/lib/transactions/sort-preferences";
+import { isDateInRange } from "@/lib/transactions/date-range";
+import { useDateRangeParam } from "@/lib/transactions/use-date-range-param";
+import {
+  buildTransactionsCsv,
+} from "@/lib/exports/csv";
+import {
+  downloadTextFile,
+  formatCsvFilename,
+} from "@/lib/persistence/download";
 
 export function TransactionsView() {
   const searchParams = useSearchParams();
@@ -42,6 +52,10 @@ export function TransactionsView() {
   const bulkDeleteTransactions = useBudgetStore((s) => s.bulkDeleteTransactions);
   const setTransactionSort = useBudgetStore((s) => s.setTransactionSort);
   const resetTransactionSort = useBudgetStore((s) => s.resetTransactionSort);
+  const showToast = useBudgetStore((s) => s.showToast);
+
+  const weekStartsOn = plan.preferences.firstDayOfWeek ?? 0;
+  const { dateRange, setDateRange } = useDateRangeParam(weekStartsOn);
 
   const [accountFilter, setAccountFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -69,7 +83,9 @@ export function TransactionsView() {
   );
 
   const rows = useMemo(() => {
+    // Filter first (date → other filters), then sort
     const filtered = plan.transactions.filter((t) => {
+      if (!isDateInRange(t.date, dateRange)) return false;
       if (batchFilter && t.importBatchId !== batchFilter) return false;
       if (accountFilter && t.accountId !== accountFilter) return false;
       if (categoryFilter && t.categoryId !== categoryFilter) return false;
@@ -92,9 +108,20 @@ export function TransactionsView() {
     categoryFilter,
     query,
     batchFilter,
+    dateRange,
     sortCriteria,
     sortCtx,
   ]);
+
+  const totals = useMemo(() => {
+    const inflow = sumCents(
+      rows.filter((t) => t.amountCents > 0).map((t) => t.amountCents),
+    );
+    const outflow = sumCents(
+      rows.filter((t) => t.amountCents < 0).map((t) => Math.abs(t.amountCents)),
+    );
+    return { inflow, outflow, net: inflow - outflow };
+  }, [rows]);
 
   function persistSort(next: typeof sortCriteria) {
     setTransactionSort("allTransactions", next);
@@ -120,7 +147,9 @@ export function TransactionsView() {
             All Transactions
           </h1>
           <p className="mt-1 text-sm text-muted">
-            {rows.length} matching · transfers excluded from spending reports
+            {rows.length} matching · In{" "}
+            <MoneyText cents={totals.inflow} /> · Out{" "}
+            <MoneyText cents={totals.outflow} />
             {batchFilter ? " · filtered to import batch" : ""}
           </p>
         </div>
@@ -134,6 +163,36 @@ export function TransactionsView() {
           </button>
           <button
             type="button"
+            onClick={() => {
+              // Export currently matching rows (date + search + account + category)
+              const { csv, rowCount } = buildTransactionsCsv(
+                { ...plan, transactions: rows },
+                {
+                  includeTransfers: true,
+                  includeHiddenAccounts: true,
+                  includeClosedAccounts: true,
+                  includeHiddenCategories: true,
+                  includeArchivedCategories: true,
+                },
+              );
+              const filename = formatCsvFilename("transactions");
+              const result = downloadTextFile({
+                content: csv,
+                filename,
+                mimeType: "text/csv;charset=utf-8",
+              });
+              showToast(
+                result.ok
+                  ? `Exported ${filename} · ${rowCount} rows`
+                  : result.error,
+              );
+            }}
+            className="inline-flex items-center rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-black/5"
+          >
+            Export CSV
+          </button>
+          <button
+            type="button"
             onClick={() => setShowForm((v) => !v)}
             className="inline-flex items-center rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
           >
@@ -142,7 +201,7 @@ export function TransactionsView() {
         </div>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -174,6 +233,12 @@ export function TransactionsView() {
             </option>
           ))}
         </select>
+        <DateRangeFilter
+          value={dateRange}
+          onChange={setDateRange}
+          weekStartsOn={weekStartsOn}
+          matchCount={rows.length}
+        />
       </div>
 
       <SortMenu

@@ -11,7 +11,7 @@ import {
 import { MoneyText } from "@/components/shared/money-text";
 import { DisabledAction } from "@/components/shared/disabled-action";
 import { formatDisplayDate, toISODate } from "@/lib/dates";
-import { parseMoneyInput } from "@/lib/money";
+import { parseMoneyInput, sumCents } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { isAccountClosed, isAccountHidden } from "@/lib/accounts/lifecycle";
 import { EditAccountModal } from "@/components/accounts/edit-account-modal";
@@ -20,6 +20,7 @@ import { TransactionActions } from "@/components/transactions/transaction-action
 import { InlineTextCell } from "@/components/transactions/inline-cell";
 import { SortableHeader } from "@/components/transactions/sort-header";
 import { SortMenu } from "@/components/transactions/sort-menu";
+import { DateRangeFilter } from "@/components/transactions/date-range-filter";
 import {
   DEFAULT_ACCOUNT_REGISTER_SORT,
   buildSortContext,
@@ -30,9 +31,16 @@ import {
   type TransactionSortPreset,
 } from "@/lib/transactions/sort";
 import { getSortCriteriaForScope } from "@/lib/transactions/sort-preferences";
+import { isDateInRange } from "@/lib/transactions/date-range";
+import { useDateRangeParam } from "@/lib/transactions/use-date-range-param";
 import { PayeeCombobox } from "@/components/shared/payee-combobox";
 import { suggestCategoryForPayeeSelection } from "@/lib/payees/catalog";
 import { resolveTransferDirection } from "@/lib/payees/transfers";
+import { buildTransactionsCsv } from "@/lib/exports/csv";
+import {
+  downloadTextFile,
+  formatCsvFilename,
+} from "@/lib/persistence/download";
 
 const REGISTER_PRESETS: TransactionSortPreset[] = [
   "newest",
@@ -62,11 +70,15 @@ export function AccountRegister({ accountId }: { accountId: string }) {
   const reopenAccount = useBudgetStore((s) => s.reopenAccount);
   const setTransactionSort = useBudgetStore((s) => s.setTransactionSort);
   const resetTransactionSort = useBudgetStore((s) => s.resetTransactionSort);
+  const showToast = useBudgetStore((s) => s.showToast);
 
   const account = plan.accounts.find((a) => a.id === accountId);
+  const weekStartsOn = plan.preferences.firstDayOfWeek ?? 0;
+  const { dateRange, setDateRange } = useDateRangeParam(weekStartsOn);
   const [showForm, setShowForm] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [editTxnId, setEditTxnId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   const sortCriteria = useMemo(
     () => getSortCriteriaForScope(plan.preferences, { accountId }),
@@ -89,14 +101,41 @@ export function AccountRegister({ accountId }: { accountId: string }) {
   );
 
   const txns = useMemo(() => {
-    const filtered = plan.transactions.filter((t) => t.accountId === accountId);
+    // Filter (account → date → search) before sort
+    const filtered = plan.transactions.filter((t) => {
+      if (t.accountId !== accountId) return false;
+      if (!isDateInRange(t.date, dateRange)) return false;
+      if (query) {
+        const q = query.toLowerCase();
+        const hay = `${t.payeeName} ${t.memo ?? ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
     return sortTransactions(
       filtered,
       sortCriteria,
       sortCtx,
       DEFAULT_ACCOUNT_REGISTER_SORT,
     );
-  }, [plan.transactions, accountId, sortCriteria, sortCtx]);
+  }, [
+    plan.transactions,
+    accountId,
+    dateRange,
+    query,
+    sortCriteria,
+    sortCtx,
+  ]);
+
+  const filteredTotals = useMemo(() => {
+    const inflow = sumCents(
+      txns.filter((t) => t.amountCents > 0).map((t) => t.amountCents),
+    );
+    const outflow = sumCents(
+      txns.filter((t) => t.amountCents < 0).map((t) => Math.abs(t.amountCents)),
+    );
+    return { inflow, outflow };
+  }, [txns]);
 
   function persistSort(next: typeof sortCriteria) {
     setTransactionSort({ accountId }, next);
@@ -158,6 +197,9 @@ export function AccountRegister({ accountId }: { accountId: string }) {
             {" · "}
             Cleared{" "}
             <MoneyText cents={balance.clearedBalanceCents} />
+            {" · "}
+            {txns.length} shown · In <MoneyText cents={filteredTotals.inflow} /> ·
+            Out <MoneyText cents={filteredTotals.outflow} />
           </p>
           {closed && account.closedAt && (
             <p className="mt-1 text-xs text-muted">
@@ -166,6 +208,36 @@ export function AccountRegister({ accountId }: { accountId: string }) {
           )}
         </div>
         <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              const { csv, rowCount } = buildTransactionsCsv(
+                { ...plan, transactions: txns },
+                {
+                  accountIds: [accountId],
+                  includeTransfers: true,
+                  includeHiddenAccounts: true,
+                  includeClosedAccounts: true,
+                  includeHiddenCategories: true,
+                  includeArchivedCategories: true,
+                },
+              );
+              const filename = formatCsvFilename("transactions");
+              const result = downloadTextFile({
+                content: csv,
+                filename,
+                mimeType: "text/csv;charset=utf-8",
+              });
+              showToast(
+                result.ok
+                  ? `Exported ${filename} · ${rowCount} rows`
+                  : result.error,
+              );
+            }}
+            className="inline-flex items-center rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-black/5"
+          >
+            Export CSV
+          </button>
           {closed ? (
             <button
               type="button"
@@ -258,13 +330,27 @@ export function AccountRegister({ accountId }: { accountId: string }) {
         onClose={() => setEditTxnId(null)}
       />
 
-      <SortMenu
-        criteria={sortCriteria}
-        allowedPresets={REGISTER_PRESETS}
-        onSelectPreset={(preset) => persistSort(criteriaFromPreset(preset))}
-        onClear={() => persistSort([...DEFAULT_ACCOUNT_REGISTER_SORT])}
-        onResetDefault={() => resetTransactionSort({ accountId })}
-      />
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search payee or memo"
+          className="input sm:max-w-xs"
+        />
+        <DateRangeFilter
+          value={dateRange}
+          onChange={setDateRange}
+          weekStartsOn={weekStartsOn}
+          matchCount={txns.length}
+        />
+        <SortMenu
+          criteria={sortCriteria}
+          allowedPresets={REGISTER_PRESETS}
+          onSelectPreset={(preset) => persistSort(criteriaFromPreset(preset))}
+          onClear={() => persistSort([...DEFAULT_ACCOUNT_REGISTER_SORT])}
+          onResetDefault={() => resetTransactionSort({ accountId })}
+        />
+      </div>
 
       {/* Desktop */}
       <div className="hidden md:block max-h-[70vh] overflow-auto rounded-xl border border-border bg-surface">
