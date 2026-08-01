@@ -4,6 +4,8 @@ import {
   assertCanTransferTo,
 } from "@/lib/accounts/operations";
 import { isAccountClosed } from "@/lib/accounts/lifecycle";
+import { ensurePayeeOnPlan } from "@/lib/payees/catalog";
+import { convertTransactionToTransfer } from "@/lib/payees/transfers";
 import type {
   BudgetPlan,
   ClearedStatus,
@@ -129,15 +131,49 @@ export function applyTransactionEdit(
     return applyTransferEdit(plan, existing, draft, input.transferAccountId);
   }
 
+  if (input.transferAccountId) {
+    const converted = convertTransactionToTransfer(
+      {
+        ...plan,
+        transactions: plan.transactions.map((t) =>
+          t.id === transactionId ? draft : t,
+        ),
+      },
+      transactionId,
+      input.transferAccountId,
+    );
+    if (!converted.ok) return converted;
+    const currentLeg =
+      converted.outTransaction.accountId === draft.accountId
+        ? converted.outTransaction
+        : converted.inTransaction;
+    return {
+      ok: true,
+      plan: converted.plan,
+      transaction: currentLeg,
+    };
+  }
+
+  const withPayee = ensurePayeeOnPlan(plan, draft.payeeName, {
+    defaultCategoryId: draft.categoryId,
+  });
+  const payee = withPayee.payees.find(
+    (p) => p.name.toLowerCase() === draft.payeeName.toLowerCase(),
+  );
+  const saved: Transaction = {
+    ...draft,
+    payeeId: payee?.id ?? draft.payeeId,
+  };
+
   return {
     ok: true,
     plan: {
-      ...plan,
-      transactions: plan.transactions.map((t) =>
-        t.id === transactionId ? draft : t,
+      ...withPayee,
+      transactions: withPayee.transactions.map((t) =>
+        t.id === transactionId ? saved : t,
       ),
     },
-    transaction: draft,
+    transaction: saved,
   };
 }
 
@@ -308,9 +344,22 @@ export function createTransaction(
   }
 
   const now = new Date().toISOString();
+  let nextPlan = plan;
+  if (!input.isTransfer) {
+    nextPlan = ensurePayeeOnPlan(plan, input.payeeName, {
+      defaultCategoryId: input.categoryId,
+    });
+  }
+  const payee = nextPlan.payees.find(
+    (p) =>
+      p.name.toLowerCase() === input.payeeName.trim().toLowerCase(),
+  );
+
   const txn: Transaction = {
     ...input,
     id: newId("txn"),
+    payeeName: input.payeeName.trim(),
+    payeeId: input.payeeId ?? payee?.id,
     approved: input.approved ?? true,
     createdAt: input.createdAt ?? now,
     updatedAt: now,
@@ -332,7 +381,7 @@ export function createTransaction(
 
   return {
     ok: true,
-    plan: { ...plan, transactions: [txn, ...plan.transactions] },
+    plan: { ...nextPlan, transactions: [txn, ...nextPlan.transactions] },
     transaction: txn,
   };
 }

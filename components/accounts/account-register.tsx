@@ -30,6 +30,9 @@ import {
   type TransactionSortPreset,
 } from "@/lib/transactions/sort";
 import { getSortCriteriaForScope } from "@/lib/transactions/sort-preferences";
+import { PayeeCombobox } from "@/components/shared/payee-combobox";
+import { suggestCategoryForPayeeSelection } from "@/lib/payees/catalog";
+import { resolveTransferDirection } from "@/lib/payees/transfers";
 
 const REGISTER_PRESETS: TransactionSortPreset[] = [
   "newest",
@@ -51,6 +54,7 @@ const REGISTER_PRESETS: TransactionSortPreset[] = [
 export function AccountRegister({ accountId }: { accountId: string }) {
   const plan = useBudgetStore((s) => s.plan);
   const addTransaction = useBudgetStore((s) => s.addTransaction);
+  const addTransfer = useBudgetStore((s) => s.addTransfer);
   const setCleared = useBudgetStore((s) => s.setCleared);
   const deleteTransaction = useBudgetStore((s) => s.deleteTransaction);
   const updateTransaction = useBudgetStore((s) => s.updateTransaction);
@@ -229,6 +233,14 @@ export function AccountRegister({ accountId }: { accountId: string }) {
           onCancel={() => setShowForm(false)}
           onSubmit={(data) => {
             addTransaction(data);
+            setShowForm(false);
+          }}
+          onTransfer={(data) => {
+            const result = addTransfer(data);
+            if (!result.ok) {
+              alert(result.error ?? "Could not transfer.");
+              return;
+            }
             setShowForm(false);
           }}
         />
@@ -489,6 +501,7 @@ function TransactionForm({
   categories,
   onCancel,
   onSubmit,
+  onTransfer,
 }: {
   accountId: string;
   categories: { id: string; name: string }[];
@@ -503,14 +516,31 @@ function TransactionForm({
     cleared: "uncleared";
     isTransfer: false;
   }) => void;
+  onTransfer: (data: {
+    fromAccountId: string;
+    toAccountId: string;
+    amountCents: number;
+    date: string;
+    memo?: string;
+  }) => void;
 }) {
+  const plan = useBudgetStore((s) => s.plan);
   const [payeeName, setPayeeName] = useState("");
+  const [transferAccountId, setTransferAccountId] = useState<string | null>(
+    null,
+  );
   const [categoryId, setCategoryId] = useState("");
+  const [categoryTouched, setCategoryTouched] = useState(false);
   const [amount, setAmount] = useState("");
   const [direction, setDirection] = useState<"outflow" | "inflow">("outflow");
   const [date, setDate] = useState(toISODate(new Date()));
   const [memo, setMemo] = useState("");
+  const [memoTouched, setMemoTouched] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const destName = transferAccountId
+    ? plan.accounts.find((a) => a.id === transferAccountId)?.name
+    : null;
 
   return (
     <form
@@ -526,13 +556,27 @@ function TransactionForm({
           setError("Enter a valid amount.");
           return;
         }
+        const amountCents = direction === "outflow" ? -parsed : parsed;
+        if (transferAccountId) {
+          const dir = resolveTransferDirection({
+            currentAccountId: accountId,
+            destinationAccountId: transferAccountId,
+            amountCents,
+          });
+          onTransfer({
+            ...dir,
+            date,
+            memo: memo.trim() || undefined,
+          });
+          return;
+        }
         onSubmit({
           accountId,
           date,
           payeeName: payeeName.trim(),
           categoryId: categoryId || null,
           memo: memo.trim() || undefined,
-          amountCents: direction === "outflow" ? -parsed : parsed,
+          amountCents,
           cleared: "uncleared",
           isTransfer: false,
         });
@@ -549,26 +593,55 @@ function TransactionForm({
           />
         </Field>
         <Field label="Payee">
-          <input
+          <PayeeCombobox
             value={payeeName}
-            onChange={(e) => setPayeeName(e.target.value)}
-            className="input"
-            required
+            currentAccountId={accountId}
+            onChange={(next) => {
+              setPayeeName(next.payeeName);
+              if (next.mode === "transfer") {
+                setTransferAccountId(next.transferAccountId);
+                setCategoryId("");
+                return;
+              }
+              setTransferAccountId(null);
+              const suggested = suggestCategoryForPayeeSelection({
+                currentCategoryId: categoryId || null,
+                categoryTouched,
+                suggestedCategoryId: next.suggestedCategoryId,
+              });
+              if (suggested) setCategoryId(suggested);
+              if (
+                !memoTouched &&
+                next.suggestedMemo &&
+                plan.preferences.suggestPayeeMemo
+              ) {
+                setMemo(next.suggestedMemo);
+              }
+            }}
           />
         </Field>
-        <Field label="Category">
-          <select
-            value={categoryId}
-            onChange={(e) => setCategoryId(e.target.value)}
-            className="input"
-          >
-            <option value="">Ready to Assign / none</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+        <Field label={transferAccountId ? "Destination" : "Category"}>
+          {transferAccountId ? (
+            <div className="input flex items-center text-sm text-muted">
+              {destName ?? "Account"}
+            </div>
+          ) : (
+            <select
+              value={categoryId}
+              onChange={(e) => {
+                setCategoryTouched(true);
+                setCategoryId(e.target.value);
+              }}
+              className="input"
+            >
+              <option value="">Ready to Assign / none</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
         </Field>
         <Field label="Type">
           <select
@@ -595,7 +668,10 @@ function TransactionForm({
         <Field label="Memo">
           <input
             value={memo}
-            onChange={(e) => setMemo(e.target.value)}
+            onChange={(e) => {
+              setMemoTouched(true);
+              setMemo(e.target.value);
+            }}
             className="input"
           />
         </Field>
@@ -606,7 +682,7 @@ function TransactionForm({
           type="submit"
           className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
         >
-          Save
+          {transferAccountId ? "Save transfer" : "Save"}
         </button>
         <button
           type="button"

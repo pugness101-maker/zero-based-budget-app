@@ -25,6 +25,7 @@ import {
   ensureImportedGroup,
 } from "@/lib/imports/map-categories";
 import { MoneyText } from "@/components/shared/money-text";
+import { PayeeCombobox } from "@/components/shared/payee-combobox";
 import { formatDisplayDate } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import type { AccountType } from "@/lib/types/budget";
@@ -945,7 +946,36 @@ export function ImportWizard({
                               ? formatDisplayDate(r.parsedDate)
                               : "—"}
                           </td>
-                          <td className="px-3 py-2">{r.payeeName}</td>
+                          <td className="px-3 py-2 min-w-[12rem]">
+                            <PayeeCombobox
+                              value={r.payeeName ?? ""}
+                              allowTransfers={false}
+                              onChange={(next) => {
+                                if (next.mode !== "payee") return;
+                                setRows((prev) =>
+                                  prev.map((x) => {
+                                    if (x.id !== r.id) return x;
+                                    const useSuggested =
+                                      !x.categoryId &&
+                                      Boolean(next.suggestedCategoryId);
+                                    return {
+                                      ...x,
+                                      payeeName: next.payeeName,
+                                      categoryId: useSuggested
+                                        ? next.suggestedCategoryId
+                                        : x.categoryId,
+                                      categoryName: useSuggested
+                                        ? plan.categories.find(
+                                            (c) =>
+                                              c.id === next.suggestedCategoryId,
+                                          )?.name ?? x.categoryName
+                                        : x.categoryName,
+                                    };
+                                  }),
+                                );
+                              }}
+                            />
+                          </td>
                           <td className="px-3 py-2">
                             {r.parsedAmountCents != null ? (
                               <MoneyText cents={r.parsedAmountCents} signed />

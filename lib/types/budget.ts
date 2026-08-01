@@ -137,6 +137,9 @@ export interface Payee {
   id: string;
   name: string;
   defaultCategoryId?: string;
+  defaultMemo?: string;
+  aliases?: string[];
+  hidden?: boolean;
 }
 
 export interface TransactionSplit {
@@ -201,6 +204,8 @@ export interface UserPreferences {
   };
   /** Settings → Categories → Groups expanded group ids */
   settingsCategoryGroupsExpanded?: Record<string, boolean>;
+  /** When selecting a prior payee, fill last-used memo */
+  suggestPayeeMemo?: boolean;
 }
 
 export interface BudgetPlan {

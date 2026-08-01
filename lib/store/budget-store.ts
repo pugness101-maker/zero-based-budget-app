@@ -98,8 +98,6 @@ function remapCategoryImportRules(
 }
 import {
   applyAccountEdit,
-  assertCanAddTransaction,
-  assertCanTransferTo,
   bulkCloseAccounts as bulkCloseAccountsOp,
   bulkReopenAccounts as bulkReopenAccountsOp,
   bulkSetHidden,
@@ -117,6 +115,13 @@ import {
   createTransaction,
   type TransactionEditInput,
 } from "@/lib/transactions/edit";
+import { createLinkedTransfer } from "@/lib/payees/transfers";
+import {
+  deletePayeeSafe,
+  mergePayees as mergePayeesOp,
+  renamePayee as renamePayeeOp,
+  updatePayeeDefaults,
+} from "@/lib/payees/manage";
 import {
   applyRedo,
   applyUndo,
@@ -177,7 +182,27 @@ interface BudgetState {
     amountCents: Cents;
     date: string;
     memo?: string;
-  }) => void;
+    cleared?: ClearedStatus;
+  }) => { ok: boolean; error?: string };
+  renamePayee: (
+    payeeIdOrName: string,
+    nextName: string,
+  ) => { ok: boolean; error?: string };
+  mergePayees: (
+    sourceIdOrName: string,
+    targetIdOrName: string,
+  ) => { ok: boolean; error?: string };
+  updatePayee: (
+    payeeId: string,
+    patch: {
+      defaultCategoryId?: string | null;
+      defaultMemo?: string | null;
+      aliases?: string[];
+      hidden?: boolean;
+    },
+  ) => { ok: boolean; error?: string };
+  deletePayee: (payeeId: string) => { ok: boolean; error?: string };
+  setSuggestPayeeMemo: (value: boolean) => void;
   undo: () => { ok: boolean; error?: string };
   redo: () => { ok: boolean; error?: string };
   canUndo: () => boolean;
@@ -680,77 +705,44 @@ export const useBudgetStore = create<BudgetState>()(
         );
       },
 
-      addTransfer: ({ fromAccountId, toAccountId, amountCents, date, memo }) => {
+      addTransfer: ({
+        fromAccountId,
+        toAccountId,
+        amountCents,
+        date,
+        memo,
+        cleared,
+      }) => {
+        const result = createLinkedTransfer(get().plan, {
+          fromAccountId,
+          toAccountId,
+          amountCents,
+          date,
+          memo,
+          cleared,
+        });
+        if (!result.ok) return { ok: false, error: result.error };
+
         const from = get().plan.accounts.find((a) => a.id === fromAccountId);
         const to = get().plan.accounts.find((a) => a.id === toAccountId);
-        const fromBlocked = assertCanAddTransaction(from);
-        if (fromBlocked) throw new Error(fromBlocked);
-        const toBlocked = assertCanTransferTo(to);
-        if (toBlocked) throw new Error(toBlocked);
-
-        const transferId = newId("xfer");
-        const outId = newId("txn");
-        const inId = newId("txn");
-        const now = new Date().toISOString();
-
-        const outTxn: Transaction = {
-          id: outId,
-          accountId: fromAccountId,
-          date,
-          payeeName: `Transfer to ${to?.name ?? "account"}`,
-          categoryId: null,
-          memo,
-          amountCents: -Math.abs(amountCents),
-          cleared: "uncleared",
-          approved: true,
-          isTransfer: true,
-          transferId,
-          transferPairId: inId,
-          source: "transfer",
-          createdAt: now,
-          updatedAt: now,
-        };
-
-        const inTxn: Transaction = {
-          id: inId,
-          accountId: toAccountId,
-          date,
-          payeeName: `Transfer from ${from?.name ?? "account"}`,
-          categoryId: null,
-          memo,
-          amountCents: Math.abs(amountCents),
-          cleared: "uncleared",
-          approved: true,
-          isTransfer: true,
-          transferId,
-          transferPairId: outId,
-          source: "transfer",
-          createdAt: now,
-          updatedAt: now,
-        };
-
         commitHistory(
           set,
           get,
           {
             actionType: "add_transfer",
             entityType: "transaction",
-            entityId: outId,
+            entityId: result.outTransaction.id,
             toast: "Transfer added",
             audit: {
               action: "create",
               entityType: "transaction",
-              entityId: outId,
+              entityId: result.outTransaction.id,
               summary: `Transfer ${from?.name} → ${to?.name}`,
             },
           },
-          {
-            plan: {
-              ...get().plan,
-              transactions: [outTxn, inTxn, ...get().plan.transactions],
-            },
-          },
+          { plan: result.plan },
         );
+        return { ok: true };
       },
 
       undo: () => {
@@ -1300,6 +1292,93 @@ export const useBudgetStore = create<BudgetState>()(
           payeeAliasRules: {
             ...s.payeeAliasRules,
             [sourceName.toLowerCase()]: canonicalName,
+          },
+        })),
+
+      renamePayee: (payeeIdOrName, nextName) => {
+        const result = renamePayeeOp(get().plan, payeeIdOrName, nextName);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "edit_transaction",
+            entityType: "payee",
+            toast: "Payee renamed",
+            audit: {
+              action: "edit",
+              entityType: "payee",
+              summary: `Renamed payee to ${nextName}`,
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      mergePayees: (sourceIdOrName, targetIdOrName) => {
+        const result = mergePayeesOp(
+          get().plan,
+          sourceIdOrName,
+          targetIdOrName,
+        );
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "edit_transaction",
+            entityType: "payee",
+            toast: "Payees merged",
+            audit: {
+              action: "edit",
+              entityType: "payee",
+              summary: `Merged payee ${sourceIdOrName} into ${targetIdOrName}`,
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      updatePayee: (payeeId, patch) => {
+        const result = updatePayeeDefaults(get().plan, payeeId, patch);
+        if (!result.ok) return { ok: false, error: result.error };
+        set({ plan: result.plan });
+        return { ok: true };
+      },
+
+      deletePayee: (payeeId) => {
+        const result = deletePayeeSafe(get().plan, payeeId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "delete_transaction",
+            entityType: "payee",
+            entityId: payeeId,
+            toast: "Payee deleted",
+            audit: {
+              action: "delete",
+              entityType: "payee",
+              entityId: payeeId,
+              summary: "Deleted unused payee",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      setSuggestPayeeMemo: (value) =>
+        set((s) => ({
+          plan: {
+            ...s.plan,
+            preferences: {
+              ...s.plan.preferences,
+              suggestPayeeMemo: value,
+            },
           },
         })),
 

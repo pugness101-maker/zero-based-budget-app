@@ -14,7 +14,12 @@ import type { Account, ClearedStatus } from "@/lib/types/budget";
 import { EditTransactionModal } from "@/components/transactions/edit-transaction-modal";
 import { TransactionActions } from "@/components/transactions/transaction-actions";
 import { CategorySelect } from "@/components/shared/category-select";
+import { PayeeCombobox } from "@/components/shared/payee-combobox";
 import { getSelectableCategories } from "@/lib/categories/lifecycle";
+import {
+  resolveTransferDirection,
+} from "@/lib/payees/transfers";
+import { suggestCategoryForPayeeSelection } from "@/lib/payees/catalog";
 import { SortableHeader } from "@/components/transactions/sort-header";
 import { SortMenu } from "@/components/transactions/sort-menu";
 import {
@@ -301,6 +306,14 @@ export function TransactionsView() {
                   alert(err instanceof Error ? err.message : "Could not add.");
                 }
               }}
+              onTransfer={(data) => {
+                const result = addTransfer(data);
+                if (!result.ok) {
+                  alert(result.error ?? "Could not transfer.");
+                  return;
+                }
+                setShowForm(false);
+              }}
             />
           ) : (
             <AddTransferForm
@@ -308,12 +321,12 @@ export function TransactionsView() {
                 (a) => a.kind !== "tracking",
               )}
               onSubmit={(data) => {
-                try {
-                  addTransfer(data);
-                  setShowForm(false);
-                } catch (err) {
-                  alert(err instanceof Error ? err.message : "Could not transfer.");
+                const result = addTransfer(data);
+                if (!result.ok) {
+                  alert(result.error ?? "Could not transfer.");
+                  return;
                 }
+                setShowForm(false);
               }}
             />
           )}
@@ -545,6 +558,7 @@ function AddTxnForm({
   accounts,
   plan,
   onSubmit,
+  onTransfer,
 }: {
   accounts: Account[];
   plan: import("@/lib/types/budget").BudgetPlan;
@@ -557,15 +571,29 @@ function AddTxnForm({
     cleared: "uncleared";
     isTransfer: false;
   }) => void;
+  onTransfer: (data: {
+    fromAccountId: string;
+    toAccountId: string;
+    amountCents: number;
+    date: string;
+  }) => void;
 }) {
   const selectable = accounts.filter((a) => !isAccountClosed(a));
   const [accountId, setAccountId] = useState(selectable[0]?.id ?? "");
   const [payeeName, setPayeeName] = useState("");
+  const [transferAccountId, setTransferAccountId] = useState<string | null>(
+    null,
+  );
   const [categoryId, setCategoryId] = useState("");
+  const [categoryTouched, setCategoryTouched] = useState(false);
   const [amount, setAmount] = useState("");
   const [direction, setDirection] = useState<"outflow" | "inflow">("outflow");
   const [date, setDate] = useState(toISODate(new Date()));
   const [error, setError] = useState<string | null>(null);
+
+  const destName = transferAccountId
+    ? accounts.find((a) => a.id === transferAccountId)?.name
+    : null;
 
   return (
     <form
@@ -577,12 +605,22 @@ function AddTxnForm({
           setError("Payee and a valid amount are required.");
           return;
         }
+        const amountCents = direction === "outflow" ? -parsed : parsed;
+        if (transferAccountId) {
+          const dir = resolveTransferDirection({
+            currentAccountId: accountId,
+            destinationAccountId: transferAccountId,
+            amountCents,
+          });
+          onTransfer({ ...dir, date });
+          return;
+        }
         onSubmit({
           accountId,
           date,
           payeeName: payeeName.trim(),
           categoryId: categoryId || null,
-          amountCents: direction === "outflow" ? -parsed : parsed,
+          amountCents,
           cleared: "uncleared",
           isTransfer: false,
         });
@@ -591,7 +629,10 @@ function AddTxnForm({
       <AccountSelect
         accounts={accounts}
         value={accountId}
-        onChange={setAccountId}
+        onChange={(id) => {
+          setAccountId(id);
+          if (transferAccountId === id) setTransferAccountId(null);
+        }}
       />
       <input
         type="date"
@@ -599,17 +640,39 @@ function AddTxnForm({
         onChange={(e) => setDate(e.target.value)}
         className="input"
       />
-      <input
+      <PayeeCombobox
         value={payeeName}
-        onChange={(e) => setPayeeName(e.target.value)}
-        placeholder="Payee"
-        className="input"
+        currentAccountId={accountId}
+        onChange={(next) => {
+          setPayeeName(next.payeeName);
+          if (next.mode === "transfer") {
+            setTransferAccountId(next.transferAccountId);
+            setCategoryId("");
+            return;
+          }
+          setTransferAccountId(null);
+          const suggested = suggestCategoryForPayeeSelection({
+            currentCategoryId: categoryId || null,
+            categoryTouched,
+            suggestedCategoryId: next.suggestedCategoryId,
+          });
+          if (suggested) setCategoryId(suggested);
+        }}
       />
-      <CategorySelect
-        plan={plan}
-        value={categoryId}
-        onChange={setCategoryId}
-      />
+      {transferAccountId ? (
+        <div className="input flex items-center text-sm text-muted">
+          Transfer · {destName ?? "account"}
+        </div>
+      ) : (
+        <CategorySelect
+          plan={plan}
+          value={categoryId}
+          onChange={(id) => {
+            setCategoryTouched(true);
+            setCategoryId(id);
+          }}
+        />
+      )}
       <select
         value={direction}
         onChange={(e) => setDirection(e.target.value as "outflow" | "inflow")}
@@ -632,7 +695,7 @@ function AddTxnForm({
         type="submit"
         className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover sm:col-span-2 lg:col-span-3 w-fit"
       >
-        Save transaction
+        {transferAccountId ? "Save transfer" : "Save transaction"}
       </button>
     </form>
   );

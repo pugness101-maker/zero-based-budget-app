@@ -10,6 +10,8 @@ import {
 import { parseMoneyInput, centsToDollarString } from "@/lib/money";
 import type { ClearedStatus, Transaction, TransactionSplit } from "@/lib/types/budget";
 import { TransactionDetailsPanel } from "@/components/transactions/transaction-details";
+import { PayeeCombobox } from "@/components/shared/payee-combobox";
+import { suggestCategoryForPayeeSelection } from "@/lib/payees/catalog";
 
 function newSplitId() {
   return `split-${crypto.randomUUID().slice(0, 8)}`;
@@ -51,7 +53,9 @@ function EditTransactionForm({
   const [date, setDate] = useState(txn.date);
   const [payeeName, setPayeeName] = useState(txn.payeeName);
   const [categoryId, setCategoryId] = useState(txn.categoryId ?? "");
+  const [categoryTouched, setCategoryTouched] = useState(false);
   const [memo, setMemo] = useState(txn.memo ?? "");
+  const [memoTouched, setMemoTouched] = useState(false);
   const [outflow, setOutflow] = useState(
     txn.amountCents < 0 ? centsToDollarString(Math.abs(txn.amountCents)) : "",
   );
@@ -63,6 +67,7 @@ function EditTransactionForm({
   const [transferAccountId, setTransferAccountId] = useState(
     pair?.accountId ?? "",
   );
+  const [asTransfer, setAsTransfer] = useState(txn.isTransfer);
   const [splits, setSplits] = useState<TransactionSplit[]>(
     txn.splits?.length
       ? txn.splits.map((s) => ({ ...s }))
@@ -99,13 +104,14 @@ function EditTransactionForm({
       accountId,
       date,
       payeeName,
-      categoryId: categoryId || null,
+      categoryId: asTransfer ? null : categoryId || null,
       memo: memo || undefined,
       amountCents,
       cleared,
       flag: flag || undefined,
-      splits: splits.length ? splits : undefined,
-      transferAccountId: txn.isTransfer ? transferAccountId : undefined,
+      splits: asTransfer ? undefined : splits.length ? splits : undefined,
+      transferAccountId:
+        asTransfer && transferAccountId ? transferAccountId : undefined,
     });
     if (!result.ok) {
       setError(result.error ?? "Could not save.");
@@ -162,7 +168,7 @@ function EditTransactionForm({
             </select>
           </Field>
 
-          {txn.isTransfer && (
+          {asTransfer && (
             <Field label="Transfer other account">
               <select
                 value={transferAccountId}
@@ -170,7 +176,7 @@ function EditTransactionForm({
                 className="input"
               >
                 {accounts
-                  .filter((a) => a.id !== accountId)
+                  .filter((a) => a.id !== accountId && !a.deletedAt)
                   .map((a) => (
                     <option
                       key={a.id}
@@ -207,19 +213,48 @@ function EditTransactionForm({
           </div>
 
           <Field label="Payee">
-            <input
+            <PayeeCombobox
               value={payeeName}
-              onChange={(e) => setPayeeName(e.target.value)}
-              className="input"
+              currentAccountId={accountId}
               disabled={txn.isTransfer}
+              onChange={(next) => {
+                setPayeeName(next.payeeName);
+                if (next.mode === "transfer") {
+                  setAsTransfer(true);
+                  setTransferAccountId(next.transferAccountId);
+                  setCategoryId("");
+                  setSplits([]);
+                  return;
+                }
+                if (!txn.isTransfer) {
+                  setAsTransfer(false);
+                  setTransferAccountId("");
+                  const suggested = suggestCategoryForPayeeSelection({
+                    currentCategoryId: categoryId || null,
+                    categoryTouched,
+                    suggestedCategoryId: next.suggestedCategoryId,
+                  });
+                  if (suggested) setCategoryId(suggested);
+                  if (
+                    !memoTouched &&
+                    next.suggestedMemo &&
+                    plan.preferences.suggestPayeeMemo
+                  ) {
+                    setMemo(next.suggestedMemo);
+                  }
+                }
+              }}
             />
           </Field>
 
-          {!txn.isTransfer && (
+          {!asTransfer && (
             <Field label="Category">
               <select
                 value={categoryId}
-                onChange={(e) => setCategoryId(e.target.value)}
+                onChange={(e) => {
+                  setCategoryTouched(true);
+                  setCategoryId(e.target.value);
+                }}
                 className="input"
                 disabled={splits.length > 0}
               >
@@ -263,7 +298,10 @@ function EditTransactionForm({
           <Field label="Memo">
             <input
               value={memo}
-              onChange={(e) => setMemo(e.target.value)}
+              onChange={(e) => {
+                setMemoTouched(true);
+                setMemo(e.target.value);
+              }}
               className="input"
             />
           </Field>
@@ -277,7 +315,7 @@ function EditTransactionForm({
             />
           </Field>
 
-          {!txn.isTransfer && (
+          {!asTransfer && (
             <div className="space-y-2 rounded-lg border border-border p-3">
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted">
