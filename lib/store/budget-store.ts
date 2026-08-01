@@ -44,7 +44,6 @@ import {
   addCategory as addCategoryOp,
   addCategoryGroup as addCategoryGroupOp,
   archiveCategory as archiveCategoryOp,
-  bulkMoveCategories as bulkMoveCategoriesOp,
   bulkSetCategoryHidden as bulkSetCategoryHiddenOp,
   deleteCategoryGroupSafe,
   deleteCategorySafe,
@@ -67,8 +66,18 @@ import {
   purgeDeletedCategory,
   restoreDeletedCategory,
   UNCATEGORIZED_ID,
+  type AvailableDisposition,
   type CategoryDeleteStrategy,
 } from "@/lib/categories/deletion";
+import {
+  bulkArchiveWithImpact,
+  bulkDeleteCategories as bulkDeleteCategoriesOp,
+  bulkHideWithImpact,
+  bulkMergeCategories as bulkMergeCategoriesOp,
+  bulkMoveWithValidation,
+  bulkRestoreCategories as bulkRestoreCategoriesOp,
+  type BulkDeleteMode,
+} from "@/lib/categories/bulk";
 import type { SortCriterion } from "@/lib/transactions/sort";
 import {
   resetSortPreferences,
@@ -299,12 +308,37 @@ interface BudgetState {
   reorderCategoryGroups: (
     orderedIds: string[],
   ) => { ok: boolean; error?: string };
-  bulkHideCategories: (categoryIds: string[]) => void;
+  bulkHideCategories: (
+    categoryIds: string[],
+    available?: AvailableDisposition,
+  ) => { ok: boolean; error?: string };
   bulkUnhideCategories: (categoryIds: string[]) => void;
+  bulkArchiveCategories: (
+    categoryIds: string[],
+    available?: AvailableDisposition,
+  ) => { ok: boolean; error?: string };
+  bulkRestoreCategories: (categoryIds: string[]) => {
+    ok: boolean;
+    error?: string;
+  };
   bulkMoveCategories: (categoryIds: string[], groupId: string) => {
     ok: boolean;
     error?: string;
   };
+  bulkMergeCategories: (
+    sourceIds: string[],
+    destinationId: string,
+    available?: AvailableDisposition,
+  ) => { ok: boolean; error?: string };
+  bulkDeleteCategories: (
+    categoryIds: string[],
+    mode: BulkDeleteMode,
+    options?: {
+      destinationId?: string;
+      available?: AvailableDisposition;
+      confirmForce?: boolean;
+    },
+  ) => { ok: boolean; error?: string };
 }
 
 function newId(prefix: string) {
@@ -2026,15 +2060,21 @@ export const useBudgetStore = create<BudgetState>()(
         return { ok: true };
       },
 
-      bulkHideCategories: (categoryIds) => {
-        const result = bulkSetCategoryHiddenOp(get().plan, categoryIds, true);
-        if (!result.ok) return;
+      bulkHideCategories: (categoryIds, available) => {
+        const result = bulkHideWithImpact(
+          get().plan,
+          categoryIds,
+          get().selectedMonthKey,
+          available,
+        );
+        if (!result.ok) return { ok: false, error: result.error };
         commitHistory(
           set,
           get,
           {
             actionType: "category_hide",
             label: "Bulk hide categories",
+            batchId: newId("bulk"),
             entityType: "category",
             toast: `Hid ${categoryIds.length} categor${categoryIds.length === 1 ? "y" : "ies"}`,
             audit: {
@@ -2046,6 +2086,7 @@ export const useBudgetStore = create<BudgetState>()(
           },
           { plan: result.plan },
         );
+        return { ok: true };
       },
 
       bulkUnhideCategories: (categoryIds) => {
@@ -2057,6 +2098,7 @@ export const useBudgetStore = create<BudgetState>()(
           {
             actionType: "category_unhide",
             label: "Bulk unhide categories",
+            batchId: newId("bulk"),
             entityType: "category",
             toast: `Unhid ${categoryIds.length} categor${categoryIds.length === 1 ? "y" : "ies"}`,
             audit: {
@@ -2070,8 +2112,65 @@ export const useBudgetStore = create<BudgetState>()(
         );
       },
 
+      bulkArchiveCategories: (categoryIds, available) => {
+        const result = bulkArchiveWithImpact(
+          get().plan,
+          categoryIds,
+          get().selectedMonthKey,
+          available,
+        );
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_archive",
+            label: "Bulk archive categories",
+            batchId: newId("bulk"),
+            entityType: "category",
+            toast: `Archived ${categoryIds.length} categor${categoryIds.length === 1 ? "y" : "ies"}`,
+            audit: {
+              action: "bulk_action",
+              entityType: "category",
+              summary: `Archived ${categoryIds.length} categories`,
+              metadata: { categoryIds },
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      bulkRestoreCategories: (categoryIds) => {
+        const result = bulkRestoreCategoriesOp(get().plan, categoryIds);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_restore",
+            label: "Bulk restore categories",
+            batchId: newId("bulk"),
+            entityType: "category",
+            toast: `Restored ${categoryIds.length} categor${categoryIds.length === 1 ? "y" : "ies"}`,
+            audit: {
+              action: "bulk_action",
+              entityType: "category",
+              summary: `Restored ${categoryIds.length} categories`,
+              metadata: { categoryIds },
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
       bulkMoveCategories: (categoryIds, groupId) => {
-        const result = bulkMoveCategoriesOp(get().plan, categoryIds, groupId);
+        const result = bulkMoveWithValidation(
+          get().plan,
+          categoryIds,
+          groupId,
+        );
         if (!result.ok) return { ok: false, error: result.error };
         commitHistory(
           set,
@@ -2079,6 +2178,7 @@ export const useBudgetStore = create<BudgetState>()(
           {
             actionType: "category_move",
             label: "Bulk move categories",
+            batchId: newId("bulk"),
             entityType: "category",
             toast: `Moved ${categoryIds.length} categor${categoryIds.length === 1 ? "y" : "ies"}`,
             audit: {
@@ -2086,6 +2186,69 @@ export const useBudgetStore = create<BudgetState>()(
               entityType: "category",
               summary: `Moved ${categoryIds.length} categories`,
               metadata: { categoryIds, groupId },
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      bulkMergeCategories: (sourceIds, destinationId, available) => {
+        const result = bulkMergeCategoriesOp(
+          get().plan,
+          sourceIds,
+          destinationId,
+          get().selectedMonthKey,
+          available,
+        );
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_merge",
+            label: "Bulk merge categories",
+            batchId: newId("bulk"),
+            entityType: "category",
+            entityId: destinationId,
+            toast: `Merged ${sourceIds.length} categories`,
+            audit: {
+              action: "bulk_action",
+              entityType: "category",
+              entityId: destinationId,
+              summary: `Merged ${sourceIds.length} categories`,
+              metadata: { sourceIds, destinationId },
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      bulkDeleteCategories: (categoryIds, mode, options) => {
+        const result = bulkDeleteCategoriesOp(
+          get().plan,
+          categoryIds,
+          get().selectedMonthKey,
+          mode,
+          options,
+        );
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType:
+              mode === "archive_unsafe" ? "category_archive" : "category_delete",
+            label: "Bulk delete categories",
+            batchId: newId("bulk"),
+            entityType: "category",
+            toast: `Updated ${categoryIds.length} categor${categoryIds.length === 1 ? "y" : "ies"}`,
+            audit: {
+              action: "bulk_action",
+              entityType: "category",
+              summary: `Bulk delete (${mode})`,
+              metadata: { categoryIds, mode, options },
             },
           },
           { plan: result.plan },

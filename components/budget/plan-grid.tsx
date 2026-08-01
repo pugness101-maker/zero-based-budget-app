@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -20,6 +20,18 @@ import { ImportPrompt } from "@/components/imports/import-prompt";
 import { ImportWizard } from "@/components/imports/import-wizard";
 import { CategoryFormModal } from "@/components/budget/category-form-modal";
 import { RowActionsMenu } from "@/components/budget/row-actions-menu";
+import { CategoryBulkBar } from "@/components/budget/category-bulk-bar";
+import {
+  CategoryBulkDialogs,
+  type BulkDialogKind,
+} from "@/components/budget/category-bulk-dialogs";
+import {
+  applyRangeSelection,
+  countSelectedOutsideVisible,
+  groupCheckboxState,
+  setManyInSet,
+  toggleIdInSet,
+} from "@/lib/categories/selection";
 
 export function PlanGrid() {
   const plan = useBudgetStore((s) => s.plan);
@@ -47,11 +59,66 @@ export function PlanGrid() {
   } | null>(null);
   const [dragCatId, setDragCatId] = useState<string | null>(null);
   const [dragGroupId, setDragGroupId] = useState<string | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [lastAnchorId, setLastAnchorId] = useState<string | null>(null);
+  const [bulkDialog, setBulkDialog] = useState<BulkDialogKind>(null);
 
   const summary = buildPlanMonthSummary(plan, monthKey);
   const activeGroups = plan.categoryGroups
     .filter((g) => !g.deletedAt && !g.hidden)
     .sort((a, b) => a.sortOrder - b.sortOrder);
+
+  const visibleCategoryIds = useMemo(
+    () => summary.groups.flatMap((g) => g.categories.map((c) => c.categoryId)),
+    [summary.groups],
+  );
+  const visibleSet = useMemo(
+    () => new Set(visibleCategoryIds),
+    [visibleCategoryIds],
+  );
+  const outsideFilterCount = countSelectedOutsideVisible(
+    selectedIds,
+    visibleSet,
+  );
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && selectMode && !bulkDialog) {
+        setSelectMode(false);
+        setSelectedIds(new Set());
+        setLastAnchorId(null);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectMode, bulkDialog]);
+
+  function toggleCategory(id: string, shiftKey: boolean) {
+    if (shiftKey) {
+      const turnOn = !selectedIds.has(id);
+      const result = applyRangeSelection(
+        visibleCategoryIds,
+        selectedIds,
+        id,
+        lastAnchorId,
+        turnOn,
+      );
+      setSelectedIds(result.selected);
+      setLastAnchorId(result.anchorId);
+      return;
+    }
+    setSelectedIds(toggleIdInSet(selectedIds, id));
+    setLastAnchorId(id);
+  }
+
+  function toggleGroup(groupId: string) {
+    const group = summary.groups.find((g) => g.groupId === groupId);
+    if (!group) return;
+    const ids = group.categories.map((c) => c.categoryId);
+    const state = groupCheckboxState(ids, selectedIds);
+    setSelectedIds(setManyInSet(selectedIds, ids, state !== true));
+  }
 
   function openAddCategory(groupId?: string) {
     setCategoryModal({
@@ -87,7 +154,58 @@ export function PlanGrid() {
           <Plus className="h-4 w-4" />
           Add Category Group
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            setSelectMode((v) => !v);
+            if (selectMode) {
+              setSelectedIds(new Set());
+              setLastAnchorId(null);
+            }
+          }}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium",
+            selectMode
+              ? "border-accent bg-accent-muted text-accent"
+              : "border-border hover:bg-black/5",
+          )}
+        >
+          {selectMode ? "Selecting…" : "Select"}
+        </button>
       </div>
+
+      {selectMode && (
+        <div className="px-4 md:px-6 pt-3 space-y-2">
+          {outsideFilterCount > 0 && (
+            <p className="text-xs text-muted">
+              {outsideFilterCount} selected categor
+              {outsideFilterCount === 1 ? "y is" : "ies are"} outside the
+              current view (collapsed groups or filters).
+            </p>
+          )}
+          <CategoryBulkBar
+            selectedCount={selectedIds.size}
+            showSelectAll
+            onSelectAll={() =>
+              setSelectedIds(new Set(visibleCategoryIds))
+            }
+            onHide={() => setBulkDialog("hide")}
+            onArchive={() => setBulkDialog("archive")}
+            onMove={() => setBulkDialog("move")}
+            onMerge={() => setBulkDialog("merge")}
+            onDelete={() => setBulkDialog("delete")}
+            onClear={() => {
+              setSelectedIds(new Set());
+              setLastAnchorId(null);
+            }}
+            onExit={() => {
+              setSelectMode(false);
+              setSelectedIds(new Set());
+              setLastAnchorId(null);
+            }}
+          />
+        </div>
+      )}
 
       {/* Desktop table */}
       <div className="hidden md:block px-4 py-4 md:px-6">
@@ -95,6 +213,7 @@ export function PlanGrid() {
           <table className="w-full text-sm">
             <thead className="bg-canvas text-left text-[11px] uppercase tracking-wider text-muted">
               <tr>
+                {selectMode && <th className="px-2 py-2.5 w-10" />}
                 <th className="px-4 py-2.5 font-semibold">Category</th>
                 <th className="px-3 py-2.5 font-semibold w-28">Assigned</th>
                 <th className="px-3 py-2.5 font-semibold w-28">Activity</th>
@@ -113,6 +232,10 @@ export function PlanGrid() {
                   )}
                   onToggle={() => toggleGroupCollapsed(group.groupId)}
                   onSelect={setSelectedCategory}
+                  selectMode={selectMode}
+                  selectedIds={selectedIds}
+                  onToggleCategory={toggleCategory}
+                  onToggleGroup={() => toggleGroup(group.groupId)}
                   onAssign={setAssigned}
                   onAddCategory={() => openAddCategory(group.groupId)}
                   onRenameGroup={() => {
@@ -275,6 +398,29 @@ export function PlanGrid() {
               className="rounded-xl border border-border bg-surface overflow-hidden"
             >
               <div className="flex items-center gap-1 px-2 py-2">
+                {selectMode && (
+                  <input
+                    type="checkbox"
+                    className="ml-1 accent-[var(--accent)]"
+                    checked={
+                      groupCheckboxState(
+                        group.categories.map((c) => c.categoryId),
+                        selectedIds,
+                      ) === true
+                    }
+                    ref={(el) => {
+                      if (el) {
+                        el.indeterminate =
+                          groupCheckboxState(
+                            group.categories.map((c) => c.categoryId),
+                            selectedIds,
+                          ) === "indeterminate";
+                      }
+                    }}
+                    aria-label={`Select all categories in ${group.name}`}
+                    onChange={() => toggleGroup(group.groupId)}
+                  />
+                )}
                 <button
                   type="button"
                   onClick={() => toggleGroupCollapsed(group.groupId)}
@@ -315,10 +461,37 @@ export function PlanGrid() {
               {!collapsed && (
                 <ul className="divide-y divide-border border-t border-border">
                   {group.categories.map((cat) => (
-                    <li key={cat.categoryId} className="flex items-start gap-1">
+                    <li
+                      key={cat.categoryId}
+                      className={cn(
+                        "flex items-start gap-1",
+                        selectedIds.has(cat.categoryId) &&
+                          "bg-accent-muted/50",
+                      )}
+                    >
+                      {selectMode && (
+                        <input
+                          type="checkbox"
+                          className="ml-3 mt-4 accent-[var(--accent)]"
+                          checked={selectedIds.has(cat.categoryId)}
+                          aria-label={`Select ${cat.name}`}
+                          onChange={(e) =>
+                            toggleCategory(
+                              cat.categoryId,
+                              (e.nativeEvent as MouseEvent).shiftKey ?? false,
+                            )
+                          }
+                        />
+                      )}
                       <button
                         type="button"
-                        onClick={() => setSelectedCategory(cat.categoryId)}
+                        onClick={(e) => {
+                          if (selectMode) {
+                            toggleCategory(cat.categoryId, e.shiftKey);
+                            return;
+                          }
+                          setSelectedCategory(cat.categoryId);
+                        }}
                         className="flex min-w-0 flex-1 flex-col gap-2 px-3 py-3 text-left"
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -400,6 +573,15 @@ export function PlanGrid() {
         defaultGroupId={categoryModal?.groupId}
       />
       <ImportWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
+      <CategoryBulkDialogs
+        kind={bulkDialog}
+        categoryIds={Array.from(selectedIds)}
+        onClose={() => setBulkDialog(null)}
+        onApplied={() => {
+          setSelectedIds(new Set());
+          setLastAnchorId(null);
+        }}
+      />
     </div>
   );
 }
@@ -409,6 +591,10 @@ function GroupRows({
   collapsed,
   onToggle,
   onSelect,
+  selectMode,
+  selectedIds,
+  onToggleCategory,
+  onToggleGroup,
   onAssign,
   onAddCategory,
   onRenameGroup,
@@ -432,6 +618,10 @@ function GroupRows({
   collapsed: boolean;
   onToggle: () => void;
   onSelect: (id: string) => void;
+  selectMode: boolean;
+  selectedIds: Set<string>;
+  onToggleCategory: (id: string, shiftKey: boolean) => void;
+  onToggleGroup: () => void;
   onAssign: (id: string, cents: number) => void;
   onAddCategory: () => void;
   onRenameGroup: () => void;
@@ -453,11 +643,14 @@ function GroupRows({
   onDropGroup: () => void;
 }) {
   const plan = useBudgetStore((s) => s.plan);
+  const groupIds = group.categories.map((c) => c.categoryId);
+  const groupState = groupCheckboxState(groupIds, selectedIds);
+  const colSpan = selectMode ? 6 : 5;
   return (
     <>
       <tr
         className="bg-canvas/80 border-t border-border"
-        draggable
+        draggable={!selectMode}
         onDragStart={() => onDragGroupStart(group.groupId)}
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
@@ -465,8 +658,20 @@ function GroupRows({
           onDropGroup();
         }}
       >
-        <td colSpan={5} className="px-2 py-1.5">
+        <td colSpan={colSpan} className="px-2 py-1.5">
           <div className="flex items-center gap-1">
+            {selectMode && (
+              <input
+                type="checkbox"
+                className="mx-2 accent-[var(--accent)]"
+                checked={groupState === true}
+                ref={(el) => {
+                  if (el) el.indeterminate = groupState === "indeterminate";
+                }}
+                aria-label={`Select all categories in ${group.name}`}
+                onChange={onToggleGroup}
+              />
+            )}
             <button
               type="button"
               onClick={onToggle}
@@ -505,9 +710,14 @@ function GroupRows({
               key={cat.categoryId}
               category={cat}
               pinned={Boolean(meta?.pinned)}
+              selectMode={selectMode}
+              selected={selectedIds.has(cat.categoryId)}
+              onToggleSelect={(shiftKey) =>
+                onToggleCategory(cat.categoryId, shiftKey)
+              }
               onSelect={() => onSelect(cat.categoryId)}
               onAssign={(cents) => onAssign(cat.categoryId, cents)}
-              draggable
+              draggable={!selectMode}
               dragging={dragCatId === cat.categoryId}
               onDragStart={() => onDragCatStart(cat.categoryId)}
               onDrop={() => onDropCat(cat.categoryId)}
@@ -547,6 +757,9 @@ function GroupRows({
 function CategoryRow({
   category,
   pinned,
+  selectMode,
+  selected,
+  onToggleSelect,
   onSelect,
   onAssign,
   draggable: canDrag,
@@ -557,6 +770,9 @@ function CategoryRow({
 }: {
   category: CategoryMonthMetrics;
   pinned?: boolean;
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (shiftKey: boolean) => void;
   onSelect: () => void;
   onAssign: (cents: number) => void;
   draggable?: boolean;
@@ -584,6 +800,7 @@ function CategoryRow({
       className={cn(
         "border-t border-border/70 hover:bg-accent-muted/40",
         dragging && "opacity-50",
+        selected && "bg-accent-muted/50 ring-1 ring-inset ring-accent/30",
       )}
       draggable={canDrag}
       onDragStart={onDragStart}
@@ -593,10 +810,32 @@ function CategoryRow({
         onDrop?.();
       }}
     >
+      {selectMode && (
+        <td className="px-2 py-2">
+          <input
+            type="checkbox"
+            className="accent-[var(--accent)]"
+            checked={Boolean(selected)}
+            aria-label={`Select ${category.name}`}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) =>
+              onToggleSelect?.(
+                (e.nativeEvent as MouseEvent).shiftKey ?? false,
+              )
+            }
+          />
+        </td>
+      )}
       <td className="px-4 py-2">
         <button
           type="button"
-          onClick={onSelect}
+          onClick={(e) => {
+            if (selectMode) {
+              onToggleSelect?.(e.shiftKey);
+              return;
+            }
+            onSelect();
+          }}
           className="flex items-center gap-2 text-left font-medium hover:text-accent"
         >
           {category.name}
