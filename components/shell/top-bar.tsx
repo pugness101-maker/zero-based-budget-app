@@ -1,0 +1,134 @@
+"use client";
+
+import {
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  Search,
+  Undo2,
+  Redo2,
+  Bell,
+  User,
+} from "lucide-react";
+import { formatMonthLabel, nextMonth, previousMonth } from "@/lib/dates";
+import { useBudgetStore } from "@/lib/store/budget-store";
+import { cn } from "@/lib/utils";
+
+export function TopBar() {
+  const monthKey = useBudgetStore((s) => s.selectedMonthKey);
+  const setMonth = useBudgetStore((s) => s.setMonth);
+  const hideBalances = useBudgetStore((s) => s.plan.preferences.hideBalances);
+  const toggleHideBalances = useBudgetStore((s) => s.toggleHideBalances);
+
+  return (
+    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-surface/90 px-3 md:px-5 backdrop-blur">
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setMonth(previousMonth(monthKey))}
+          className="rounded-lg p-2 hover:bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          aria-label="Previous month"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <p className="min-w-[9.5rem] text-center text-sm font-semibold tracking-tight">
+          {formatMonthLabel(monthKey)}
+        </p>
+        <button
+          type="button"
+          onClick={() => setMonth(nextMonth(monthKey))}
+          className="rounded-lg p-2 hover:bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          aria-label="Next month"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="ml-auto flex items-center gap-1">
+        <IconButton
+          label="Search"
+          disabled
+          reason="Global search ships with the command menu."
+        >
+          <Search className="h-4 w-4" />
+        </IconButton>
+        <IconButton
+          label="Undo"
+          disabled
+          reason="Undo/redo stack ships in a later Phase 1 increment."
+        >
+          <Undo2 className="h-4 w-4" />
+        </IconButton>
+        <IconButton
+          label="Redo"
+          disabled
+          reason="Undo/redo stack ships in a later Phase 1 increment."
+        >
+          <Redo2 className="h-4 w-4" />
+        </IconButton>
+        <button
+          type="button"
+          onClick={toggleHideBalances}
+          className="rounded-lg p-2 hover:bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          aria-label={hideBalances ? "Show balances" : "Hide balances"}
+          title={hideBalances ? "Show balances" : "Hide balances"}
+        >
+          {hideBalances ? (
+            <EyeOff className="h-4 w-4" />
+          ) : (
+            <Eye className="h-4 w-4" />
+          )}
+        </button>
+        <IconButton
+          label="Notifications"
+          disabled
+          reason="Notifications are planned for Phase 3."
+        >
+          <Bell className="h-4 w-4" />
+        </IconButton>
+        <div
+          className="ml-1 flex items-center gap-2 rounded-full border border-border px-2 py-1"
+          title="Demo user"
+        >
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-muted text-accent">
+            <User className="h-3.5 w-3.5" />
+          </span>
+          <span className="hidden sm:inline text-xs font-medium">Demo</span>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function IconButton({
+  children,
+  label,
+  disabled,
+  reason,
+  className,
+}: {
+  children: React.ReactNode;
+  label: string;
+  disabled?: boolean;
+  reason?: string;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      title={disabled ? reason : label}
+      aria-label={label}
+      className={cn(
+        "rounded-lg p-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent",
+        disabled
+          ? "text-muted opacity-50 cursor-not-allowed"
+          : "hover:bg-black/5",
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
