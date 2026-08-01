@@ -41,6 +41,15 @@ export interface Account {
   importedSource?: string;
   /** Soft delete only — permanent removal when safe */
   deletedAt?: string;
+  /** How the account was removed (Settings → Recently Deleted) */
+  deletionMethod?:
+    | "empty_purge"
+    | "delete_all_history"
+    | "move_then_delete"
+    | "soft_delete"
+    | "purge";
+  /** Snapshot of txn count at soft-delete time (for Recently Deleted UI) */
+  deletedTransactionCount?: number;
   sortOrder: number;
 }
 
@@ -219,6 +228,8 @@ export interface UserPreferences {
   /** Show Hidden/Closed sections expanded in sidebar */
   showHiddenAccounts?: boolean;
   showClosedAccounts?: boolean;
+  /** Soft-deleted account recovery window (days). Default 30. */
+  deletedAccountRetentionDays?: number;
   /**
    * Saved transaction table sorts (per surface / account).
    * Stored as plain criteria arrays for local demo persistence.

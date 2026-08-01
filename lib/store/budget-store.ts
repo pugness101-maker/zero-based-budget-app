@@ -121,6 +121,13 @@ import {
   type CloseAccountInput,
 } from "@/lib/accounts/operations";
 import {
+  applyAccountDeleteStrategy,
+  bulkApplyAccountDelete,
+  purgeSoftDeletedAccount,
+  restoreSoftDeletedAccount,
+  type AccountDeleteStrategy,
+} from "@/lib/accounts/deletion";
+import {
   applyBulkDelete,
   applyBulkTransactionPatch,
   applyTransactionEdit,
@@ -325,6 +332,23 @@ interface BudgetState {
     keepHidden?: boolean,
   ) => { ok: boolean; error?: string };
   deleteAccount: (accountId: string) => { ok: boolean; error?: string };
+  deleteAccountWithStrategy: (
+    accountId: string,
+    strategy: AccountDeleteStrategy,
+  ) => { ok: boolean; error?: string };
+  restoreDeletedAccount: (accountId: string) => { ok: boolean; error?: string };
+  purgeDeletedAccount: (
+    accountId: string,
+    options: {
+      confirmedName: string;
+      secondConfirm: boolean;
+    },
+  ) => { ok: boolean; error?: string };
+  bulkDeleteClosedAccounts: (
+    accountIds: string[],
+    strategy: AccountDeleteStrategy & { allowBulkHistoryDelete?: boolean },
+  ) => { ok: boolean; error?: string };
+  setDeletedAccountRetentionDays: (days: number) => void;
   bulkHideAccounts: (accountIds: string[]) => void;
   bulkUnhideAccounts: (accountIds: string[]) => void;
   bulkCloseAccounts: (
@@ -1801,6 +1825,10 @@ export const useBudgetStore = create<BudgetState>()(
       },
 
       deleteAccount: (accountId) => {
+        get().createBackup(
+          `Before delete account ${accountId}`,
+          "pre_bulk_delete",
+        );
         const result = deleteAccountSafe(get().plan, accountId);
         if (!result.ok) return { ok: false, error: result.error };
         commitHistory(
@@ -1821,6 +1849,139 @@ export const useBudgetStore = create<BudgetState>()(
           { plan: result.plan },
         );
         return { ok: true };
+      },
+
+      deleteAccountWithStrategy: (accountId, strategy) => {
+        get().createBackup(
+          `Before delete account ${accountId} (${strategy.mode})`,
+          "pre_bulk_delete",
+        );
+        const result = applyAccountDeleteStrategy(
+          get().plan,
+          accountId,
+          strategy,
+        );
+        if (!result.ok) return { ok: false, error: result.error };
+        const undoable =
+          strategy.mode === "soft_delete" ||
+          strategy.mode === "move_then_delete" ||
+          strategy.mode === "empty_purge";
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_delete",
+            entityType: "account",
+            entityId: accountId,
+            toast:
+              strategy.mode === "soft_delete"
+                ? "Account moved to Recently Deleted"
+                : strategy.mode === "move_then_delete"
+                  ? "Moved history and deleted account"
+                  : strategy.mode === "delete_all_history"
+                    ? "Account and history permanently deleted"
+                    : "Account deleted",
+            audit: {
+              action: "account_delete",
+              entityType: "account",
+              entityId: accountId,
+              summary: `Deleted account (${strategy.mode})`,
+              metadata: { mode: strategy.mode, undoable },
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      restoreDeletedAccount: (accountId) => {
+        const result = restoreSoftDeletedAccount(get().plan, accountId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_restore",
+            entityType: "account",
+            entityId: accountId,
+            toast: "Account restored",
+            audit: {
+              action: "account_restore",
+              entityType: "account",
+              entityId: accountId,
+              summary: "Restored soft-deleted account",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      purgeDeletedAccount: (accountId, options) => {
+        get().createBackup(
+          `Before purge account ${accountId}`,
+          "pre_bulk_delete",
+        );
+        const result = purgeSoftDeletedAccount(get().plan, accountId, options);
+        if (!result.ok) return { ok: false, error: result.error };
+        // Purge is intentionally not undoable via history after confirmation
+        set((s) => ({
+          plan: result.plan,
+          undoStack: [],
+          redoStack: [],
+          toastMessage: "Account permanently purged",
+          auditEvents: [
+            auditEvent({
+              action: "account_purge",
+              entityType: "account",
+              entityId: accountId,
+              summary: "Permanently purged soft-deleted account",
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        }));
+        return { ok: true };
+      },
+
+      bulkDeleteClosedAccounts: (accountIds, strategy) => {
+        get().createBackup(
+          `Before bulk delete ${accountIds.length} closed account(s)`,
+          "pre_bulk_delete",
+        );
+        const result = bulkApplyAccountDelete(get().plan, accountIds, strategy);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_delete",
+            label: "Bulk delete closed accounts",
+            batchId: newId("bulk"),
+            entityType: "account",
+            toast: `Updated ${accountIds.length} closed account(s)`,
+            audit: {
+              action: "bulk_action",
+              entityType: "account",
+              summary: `Bulk delete closed (${strategy.mode})`,
+              metadata: { accountIds, mode: strategy.mode },
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      setDeletedAccountRetentionDays: (days) => {
+        const clamped = Math.min(365, Math.max(1, Math.round(days)));
+        set((s) => ({
+          plan: {
+            ...s.plan,
+            preferences: {
+              ...s.plan.preferences,
+              deletedAccountRetentionDays: clamped,
+            },
+          },
+        }));
       },
 
       bulkHideAccounts: (accountIds) => {

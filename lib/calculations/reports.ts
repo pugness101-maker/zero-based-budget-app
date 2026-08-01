@@ -13,6 +13,8 @@ export interface ReportFilters {
   endDate: string;
   accountIds: string[]; // empty = all
   categoryIds: string[]; // empty = all
+  /** When true, soft-deleted accounts appear in the account filter list */
+  includeDeletedAccounts?: boolean;
 }
 
 export interface CategorySpendRow {
@@ -176,10 +178,10 @@ export function buildReportDataset(
   let assetCents = 0;
   let liabilityCents = 0;
   for (const account of plan.accounts) {
-    if (account.deletedAt) continue;
-    // Include closed accounts so net-worth history is preserved
+    // Soft-deleted accounts keep historical net worth (like closed).
+    // Permanently purged accounts are removed from the plan entirely.
     if (
-      filters.accountIds.length > 0 &&
+      (filters.accountIds?.length ?? 0) > 0 &&
       !filters.accountIds.includes(account.id)
     ) {
       continue;

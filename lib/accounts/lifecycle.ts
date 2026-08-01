@@ -29,6 +29,7 @@ export interface DeleteBlocker {
     | "has_scheduled"
     | "has_reconciliations"
     | "has_import_refs"
+    | "has_goals"
     | "soft_deleted";
   message: string;
 }
@@ -143,6 +144,15 @@ export function getDeleteBlockers(
     blockers.push({
       code: "has_import_refs",
       message: "Has import history references.",
+    });
+  }
+  const goals = plan.targets.filter(
+    (t) => t.linkType === "account" && t.accountId === accountId && !t.paused,
+  );
+  if (goals.length > 0) {
+    blockers.push({
+      code: "has_goals",
+      message: `Has ${goals.length} account-linked goal(s).`,
     });
   }
   return blockers;

@@ -140,18 +140,36 @@ export function ReportsView() {
               aria-label="Filter accounts"
             >
               {plan.accounts
-                .filter((a) => !a.deletedAt)
+                .filter(
+                  (a) =>
+                    !a.deletedAt ||
+                    Boolean(effectiveFilters.includeDeletedAccounts),
+                )
                 .map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name}
                     {a.isHidden ? " (hidden)" : ""}
                     {a.closed || a.closedAt ? " (closed)" : ""}
+                    {a.deletedAt ? " (deleted)" : ""}
                   </option>
                 ))}
             </select>
+            <label className="mt-2 flex items-center gap-2 text-[11px] text-muted">
+              <input
+                type="checkbox"
+                checked={Boolean(effectiveFilters.includeDeletedAccounts)}
+                onChange={(e) =>
+                  setFilters({
+                    ...effectiveFilters,
+                    includeDeletedAccounts: e.target.checked,
+                  })
+                }
+              />
+              Include deleted accounts
+            </label>
             <p className="mt-1 text-[11px] text-muted">
               Hold Cmd/Ctrl to multi-select. None selected = all accounts
-              (including closed history).
+              (including closed history; soft-deleted stay in totals).
             </p>
           </label>
           <label className="block text-sm">

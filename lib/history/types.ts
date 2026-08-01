@@ -18,6 +18,8 @@ export type HistoryActionType =
   | "account_reopen"
   | "account_edit"
   | "account_delete"
+  | "account_restore"
+  | "account_purge"
   | "target_edit"
   | "target_add"
   | "target_delete"
@@ -80,6 +82,8 @@ export function historyLabel(actionType: HistoryActionType): string {
     account_reopen: "Reopen account",
     account_edit: "Edit account",
     account_delete: "Delete account",
+    account_restore: "Restore account",
+    account_purge: "Purge account",
     target_edit: "Edit target",
     target_add: "Add target",
     target_delete: "Delete target",

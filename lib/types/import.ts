@@ -182,6 +182,8 @@ export type AuditAction =
   | "account_close"
   | "account_reopen"
   | "account_delete"
+  | "account_restore"
+  | "account_purge"
   | "account_edit"
   | "undo"
   | "redo"

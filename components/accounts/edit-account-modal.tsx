@@ -5,12 +5,11 @@ import { useBudgetStore } from "@/lib/store/budget-store";
 import { getAccountBalance } from "@/lib/calculations/account-balances";
 import {
   buildClosePreview,
-  canPermanentlyDelete,
-  getDeleteBlockers,
   isAccountClosed,
 } from "@/lib/accounts/lifecycle";
 import { MoneyText } from "@/components/shared/money-text";
 import { CloseAccountDialog } from "@/components/accounts/close-account-dialog";
+import { DeleteAccountDialog } from "@/components/accounts/delete-account-dialog";
 import type {
   Account,
   AccountBudgetKind,
@@ -69,7 +68,6 @@ function EditAccountForm({
   const updateAccount = useBudgetStore((s) => s.updateAccount);
   const hideAccount = useBudgetStore((s) => s.hideAccount);
   const unhideAccount = useBudgetStore((s) => s.unhideAccount);
-  const deleteAccount = useBudgetStore((s) => s.deleteAccount);
 
   const [name, setName] = useState(account.name);
   const [note, setNote] = useState(account.note ?? "");
@@ -78,11 +76,10 @@ function EditAccountForm({
   const [isHidden, setIsHidden] = useState(Boolean(account.isHidden));
   const [error, setError] = useState<string | null>(null);
   const [showClose, setShowClose] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
 
   const balance = getAccountBalance(account, plan.transactions);
   const closed = isAccountClosed(account);
-  const canDelete = canPermanentlyDelete(plan, account.id);
-  const deleteBlockers = getDeleteBlockers(plan, account.id);
   const preview = buildClosePreview(plan, account.id);
 
   return (
@@ -197,37 +194,22 @@ function EditAccountForm({
               )}
               <button
                 type="button"
-                disabled={!canDelete}
+                disabled={!closed || Boolean(account.deletedAt)}
                 title={
-                  canDelete
-                    ? "Permanently delete this empty account"
-                    : deleteBlockers.map((b) => b.message).join(" ")
+                  closed
+                    ? "Open delete workflow"
+                    : "Close the account before deleting"
                 }
-                onClick={() => {
-                  if (
-                    !confirm(
-                      "Permanently delete this account? This cannot be undone.",
-                    )
-                  ) {
-                    return;
-                  }
-                  const result = deleteAccount(account.id);
-                  if (!result.ok) {
-                    setError(result.error ?? "Delete failed.");
-                    return;
-                  }
-                  onClose();
-                }}
+                onClick={() => setShowDelete(true)}
                 className="rounded-lg border border-border px-3 py-2 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-black/5"
               >
                 Delete Account
               </button>
             </div>
-            {!canDelete && (
+            {!closed && (
               <p className="text-xs text-muted">
-                Delete is disabled:{" "}
-                {deleteBlockers.map((b) => b.message).join(" ")} Use Close
-                Account to preserve history.
+                Close the account first, then use Delete for the guided safety
+                workflow (soft delete, move history, or purge).
               </p>
             )}
           </div>
@@ -274,6 +256,15 @@ function EditAccountForm({
         onClose={() => setShowClose(false)}
         onClosed={() => {
           setShowClose(false);
+          onClose();
+        }}
+      />
+      <DeleteAccountDialog
+        accountId={account.id}
+        open={showDelete}
+        onClose={() => setShowDelete(false)}
+        onDeleted={() => {
+          setShowDelete(false);
           onClose();
         }}
       />
