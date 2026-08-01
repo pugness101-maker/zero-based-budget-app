@@ -239,7 +239,7 @@ export function computeReadyToAssign(
   let cashOverspend = 0;
 
   for (const category of plan.categories) {
-    if (category.hidden) continue;
+    if (category.hidden || category.deletedAt || category.isArchived) continue;
     const available = getCategoryAvailable(plan, category, monthKey, cache);
     if (available >= 0) continue;
     const type = getOverspendingType(
@@ -276,10 +276,16 @@ export function buildPlanMonthSummary(
   );
 
   for (const group of sortedGroups) {
-    if (group.hidden) continue;
+    if (group.hidden || group.deletedAt) continue;
 
     const cats = plan.categories
-      .filter((c) => c.groupId === group.id && !c.hidden)
+      .filter(
+        (c) =>
+          c.groupId === group.id &&
+          !c.hidden &&
+          !c.deletedAt &&
+          !c.isArchived,
+      )
       .sort((a, b) => a.sortOrder - b.sortOrder);
 
     const categoryMetrics: CategoryMonthMetrics[] = cats.map((category) => {

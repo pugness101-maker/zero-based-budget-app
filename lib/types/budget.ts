@@ -48,8 +48,11 @@ export interface CategoryGroup {
   id: string;
   name: string;
   sortOrder: number;
+  /** Hidden from normal Plan view */
   hidden: boolean;
   collapsed?: boolean;
+  deletedAt?: string;
+  mergedIntoGroupId?: string;
 }
 
 export interface Category {
@@ -57,10 +60,19 @@ export interface Category {
   groupId: string;
   name: string;
   sortOrder: number;
+  /** Hidden from Plan and default selectors (not deleted) */
   hidden: boolean;
   notes?: string;
   /** When false, leftover available does not roll into next month */
   rollover: boolean;
+  pinned?: boolean;
+  isArchived?: boolean;
+  deletedAt?: string;
+  mergedIntoCategoryId?: string;
+  /** When false, exclude from new report defaults (history still queryable) */
+  reportIncluded?: boolean;
+  color?: string;
+  icon?: string;
 }
 
 export type BudgetValueSource = "app" | "ynab_import";

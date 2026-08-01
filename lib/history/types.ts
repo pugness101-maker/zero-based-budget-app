@@ -21,7 +21,19 @@ export type HistoryActionType =
   | "target_edit"
   | "target_add"
   | "target_delete"
+  | "category_add"
   | "category_edit"
+  | "category_delete"
+  | "category_hide"
+  | "category_unhide"
+  | "category_move"
+  | "category_merge"
+  | "category_reorder"
+  | "category_group_add"
+  | "category_group_edit"
+  | "category_group_delete"
+  | "category_group_merge"
+  | "category_group_reorder"
   | "reconcile_adjustment";
 
 export interface HistorySnapshot {
@@ -69,7 +81,19 @@ export function historyLabel(actionType: HistoryActionType): string {
     target_edit: "Edit target",
     target_add: "Add target",
     target_delete: "Delete target",
+    category_add: "Add category",
     category_edit: "Edit category",
+    category_delete: "Delete category",
+    category_hide: "Hide category",
+    category_unhide: "Unhide category",
+    category_move: "Move category",
+    category_merge: "Merge categories",
+    category_reorder: "Reorder categories",
+    category_group_add: "Add category group",
+    category_group_edit: "Edit category group",
+    category_group_delete: "Delete category group",
+    category_group_merge: "Merge category groups",
+    category_group_reorder: "Reorder category groups",
     reconcile_adjustment: "Reconciliation adjustment",
   };
   return labels[actionType];

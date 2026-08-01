@@ -39,6 +39,28 @@ import { commitYnabZipImport as commitYnabZip } from "@/lib/imports/ynab/commit-
 import type { YnabZipCommitInput } from "@/lib/imports/ynab/commit-ynab-zip";
 import { IMPORT_SCHEMA_VERSION } from "@/lib/types/import";
 import { migratePlanAccounts } from "@/lib/accounts/lifecycle";
+import { migratePlanCategories } from "@/lib/categories/lifecycle";
+import {
+  addCategory as addCategoryOp,
+  addCategoryGroup as addCategoryGroupOp,
+  archiveCategory as archiveCategoryOp,
+  bulkMoveCategories as bulkMoveCategoriesOp,
+  bulkSetCategoryHidden as bulkSetCategoryHiddenOp,
+  deleteCategoryGroupSafe,
+  deleteCategorySafe,
+  editCategory as editCategoryOp,
+  hideCategory as hideCategoryOp,
+  hideCategoryGroup as hideCategoryGroupOp,
+  mergeCategories as mergeCategoriesOp,
+  mergeCategoryGroups as mergeCategoryGroupsOp,
+  moveCategoryToGroup as moveCategoryToGroupOp,
+  renameCategoryGroup as renameCategoryGroupOp,
+  reorderCategories as reorderCategoriesOp,
+  reorderCategoryGroups as reorderCategoryGroupsOp,
+  unhideCategory as unhideCategoryOp,
+  type AddCategoryInput,
+  type EditCategoryInput,
+} from "@/lib/categories/operations";
 import {
   applyAccountEdit,
   assertCanAddTransaction,
@@ -196,6 +218,55 @@ interface BudgetState {
   bulkReopenAccounts: (accountIds: string[], keepHidden?: boolean) => void;
   setShowHiddenAccounts: (value: boolean) => void;
   setShowClosedAccounts: (value: boolean) => void;
+  addCategory: (
+    input: AddCategoryInput,
+  ) => { ok: boolean; error?: string; categoryId?: string };
+  editCategory: (
+    categoryId: string,
+    input: EditCategoryInput,
+  ) => { ok: boolean; error?: string };
+  hideCategory: (categoryId: string) => { ok: boolean; error?: string };
+  unhideCategory: (categoryId: string) => { ok: boolean; error?: string };
+  archiveCategory: (categoryId: string) => { ok: boolean; error?: string };
+  deleteCategory: (categoryId: string) => { ok: boolean; error?: string };
+  mergeCategories: (
+    sourceId: string,
+    destinationId: string,
+  ) => { ok: boolean; error?: string };
+  moveCategory: (
+    categoryId: string,
+    groupId: string,
+    index?: number,
+  ) => { ok: boolean; error?: string };
+  reorderCategories: (
+    groupId: string,
+    orderedIds: string[],
+  ) => { ok: boolean; error?: string };
+  addCategoryGroup: (
+    name: string,
+  ) => { ok: boolean; error?: string; groupId?: string };
+  renameCategoryGroup: (
+    groupId: string,
+    name: string,
+  ) => { ok: boolean; error?: string };
+  hideCategoryGroup: (
+    groupId: string,
+    hidden?: boolean,
+  ) => { ok: boolean; error?: string };
+  deleteCategoryGroup: (groupId: string) => { ok: boolean; error?: string };
+  mergeCategoryGroups: (
+    sourceGroupId: string,
+    destinationGroupId: string,
+  ) => { ok: boolean; error?: string };
+  reorderCategoryGroups: (
+    orderedIds: string[],
+  ) => { ok: boolean; error?: string };
+  bulkHideCategories: (categoryIds: string[]) => void;
+  bulkUnhideCategories: (categoryIds: string[]) => void;
+  bulkMoveCategories: (categoryIds: string[], groupId: string) => {
+    ok: boolean;
+    error?: string;
+  };
 }
 
 function newId(prefix: string) {
@@ -1399,6 +1470,434 @@ export const useBudgetStore = create<BudgetState>()(
             preferences: { ...s.plan.preferences, showClosedAccounts: value },
           },
         })),
+
+      addCategory: (input) => {
+        const result = addCategoryOp(get().plan, input);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_add",
+            entityType: "category",
+            entityId: result.entityId,
+            toast: "Category added",
+            audit: {
+              action: "category_add",
+              entityType: "category",
+              entityId: result.entityId,
+              summary: `Added category ${input.name.trim()}`,
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true, categoryId: result.entityId };
+      },
+
+      editCategory: (categoryId, input) => {
+        const result = editCategoryOp(get().plan, categoryId, input);
+        if (!result.ok) return { ok: false, error: result.error };
+        const actionType =
+          input.groupId &&
+          input.groupId !==
+            get().plan.categories.find((c) => c.id === categoryId)?.groupId
+            ? "category_move"
+            : "category_edit";
+        commitHistory(
+          set,
+          get,
+          {
+            actionType,
+            entityType: "category",
+            entityId: categoryId,
+            toast: "Category updated",
+            audit: {
+              action: "category_edit",
+              entityType: "category",
+              entityId: categoryId,
+              summary: "Edited category",
+              metadata: input as Record<string, unknown>,
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      hideCategory: (categoryId) => {
+        const result = hideCategoryOp(get().plan, categoryId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_hide",
+            entityType: "category",
+            entityId: categoryId,
+            toast: "Category hidden",
+            audit: {
+              action: "category_edit",
+              entityType: "category",
+              entityId: categoryId,
+              summary: "Hid category",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      unhideCategory: (categoryId) => {
+        const result = unhideCategoryOp(get().plan, categoryId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_unhide",
+            entityType: "category",
+            entityId: categoryId,
+            toast: "Category unhidden",
+            audit: {
+              action: "category_edit",
+              entityType: "category",
+              entityId: categoryId,
+              summary: "Unhid category",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      archiveCategory: (categoryId) => {
+        const result = archiveCategoryOp(get().plan, categoryId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_hide",
+            label: "Archive category",
+            entityType: "category",
+            entityId: categoryId,
+            toast: "Category archived",
+            audit: {
+              action: "category_edit",
+              entityType: "category",
+              entityId: categoryId,
+              summary: "Archived category",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      deleteCategory: (categoryId) => {
+        const result = deleteCategorySafe(get().plan, categoryId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_delete",
+            entityType: "category",
+            entityId: categoryId,
+            toast: "Category deleted",
+            audit: {
+              action: "category_delete",
+              entityType: "category",
+              entityId: categoryId,
+              summary: "Deleted category",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      mergeCategories: (sourceId, destinationId) => {
+        const result = mergeCategoriesOp(get().plan, sourceId, destinationId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_merge",
+            entityType: "category",
+            entityId: destinationId,
+            toast: "Categories merged",
+            audit: {
+              action: "category_merge",
+              entityType: "category",
+              entityId: destinationId,
+              summary: `Merged category into ${destinationId}`,
+              metadata: { sourceId, destinationId },
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      moveCategory: (categoryId, groupId, index) => {
+        const result = moveCategoryToGroupOp(
+          get().plan,
+          categoryId,
+          groupId,
+          index,
+        );
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_move",
+            entityType: "category",
+            entityId: categoryId,
+            toast: "Category moved",
+            audit: {
+              action: "category_edit",
+              entityType: "category",
+              entityId: categoryId,
+              summary: "Moved category",
+              metadata: { groupId, index },
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      reorderCategories: (groupId, orderedIds) => {
+        const result = reorderCategoriesOp(get().plan, orderedIds, groupId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_reorder",
+            entityType: "category_group",
+            entityId: groupId,
+            audit: {
+              action: "category_edit",
+              entityType: "category_group",
+              entityId: groupId,
+              summary: "Reordered categories",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      addCategoryGroup: (name) => {
+        const result = addCategoryGroupOp(get().plan, name);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_group_add",
+            entityType: "category_group",
+            entityId: result.entityId,
+            toast: "Category group added",
+            audit: {
+              action: "category_group_change",
+              entityType: "category_group",
+              entityId: result.entityId,
+              summary: `Added group ${name.trim()}`,
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true, groupId: result.entityId };
+      },
+
+      renameCategoryGroup: (groupId, name) => {
+        const result = renameCategoryGroupOp(get().plan, groupId, name);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_group_edit",
+            entityType: "category_group",
+            entityId: groupId,
+            toast: "Group renamed",
+            audit: {
+              action: "category_group_change",
+              entityType: "category_group",
+              entityId: groupId,
+              summary: `Renamed group to ${name.trim()}`,
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      hideCategoryGroup: (groupId, hidden = true) => {
+        const result = hideCategoryGroupOp(get().plan, groupId, hidden);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_group_edit",
+            entityType: "category_group",
+            entityId: groupId,
+            toast: hidden ? "Group hidden" : "Group shown",
+            audit: {
+              action: "category_group_change",
+              entityType: "category_group",
+              entityId: groupId,
+              summary: hidden ? "Hid group" : "Unhid group",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      deleteCategoryGroup: (groupId) => {
+        const result = deleteCategoryGroupSafe(get().plan, groupId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_group_delete",
+            entityType: "category_group",
+            entityId: groupId,
+            toast: "Group deleted",
+            audit: {
+              action: "category_group_change",
+              entityType: "category_group",
+              entityId: groupId,
+              summary: "Deleted empty group",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      mergeCategoryGroups: (sourceGroupId, destinationGroupId) => {
+        const result = mergeCategoryGroupsOp(
+          get().plan,
+          sourceGroupId,
+          destinationGroupId,
+        );
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_group_merge",
+            entityType: "category_group",
+            entityId: destinationGroupId,
+            toast: "Groups merged",
+            audit: {
+              action: "category_group_change",
+              entityType: "category_group",
+              entityId: destinationGroupId,
+              summary: "Merged category groups",
+              metadata: { sourceGroupId, destinationGroupId },
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      reorderCategoryGroups: (orderedIds) => {
+        const result = reorderCategoryGroupsOp(get().plan, orderedIds);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_group_reorder",
+            entityType: "category_group",
+            audit: {
+              action: "category_group_change",
+              entityType: "category_group",
+              summary: "Reordered category groups",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      bulkHideCategories: (categoryIds) => {
+        const result = bulkSetCategoryHiddenOp(get().plan, categoryIds, true);
+        if (!result.ok) return;
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_hide",
+            label: "Bulk hide categories",
+            entityType: "category",
+            toast: `Hid ${categoryIds.length} categor${categoryIds.length === 1 ? "y" : "ies"}`,
+            audit: {
+              action: "bulk_action",
+              entityType: "category",
+              summary: `Hid ${categoryIds.length} categories`,
+              metadata: { categoryIds },
+            },
+          },
+          { plan: result.plan },
+        );
+      },
+
+      bulkUnhideCategories: (categoryIds) => {
+        const result = bulkSetCategoryHiddenOp(get().plan, categoryIds, false);
+        if (!result.ok) return;
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_unhide",
+            label: "Bulk unhide categories",
+            entityType: "category",
+            toast: `Unhid ${categoryIds.length} categor${categoryIds.length === 1 ? "y" : "ies"}`,
+            audit: {
+              action: "bulk_action",
+              entityType: "category",
+              summary: `Unhid ${categoryIds.length} categories`,
+              metadata: { categoryIds },
+            },
+          },
+          { plan: result.plan },
+        );
+      },
+
+      bulkMoveCategories: (categoryIds, groupId) => {
+        const result = bulkMoveCategoriesOp(get().plan, categoryIds, groupId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_move",
+            label: "Bulk move categories",
+            entityType: "category",
+            toast: `Moved ${categoryIds.length} categor${categoryIds.length === 1 ? "y" : "ies"}`,
+            audit: {
+              action: "bulk_action",
+              entityType: "category",
+              summary: `Moved ${categoryIds.length} categories`,
+              metadata: { categoryIds, groupId },
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
     }),
     {
       name: "edf-budget-demo",
@@ -1420,7 +1919,7 @@ export const useBudgetStore = create<BudgetState>()(
       }),
       onRehydrateStorage: () => (state) => {
         if (state?.plan) {
-          state.plan = migratePlanAccounts(state.plan);
+          state.plan = migratePlanCategories(migratePlanAccounts(state.plan));
         }
         state?.setHydrated(true);
       },

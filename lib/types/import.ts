@@ -169,7 +169,12 @@ export type AuditAction =
   | "account_delete"
   | "account_edit"
   | "undo"
-  | "redo";
+  | "redo"
+  | "category_add"
+  | "category_edit"
+  | "category_delete"
+  | "category_merge"
+  | "category_group_change";
 
 export interface AuditEvent {
   id: string;

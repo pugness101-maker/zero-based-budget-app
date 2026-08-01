@@ -27,11 +27,26 @@ export function splitCategoryPath(raw: string): { group?: string; category: stri
 export function findCategoryByName(
   plan: BudgetPlan,
   rawName: string,
+  options: { includeHidden?: boolean } = {},
 ): Category | undefined {
   const { category } = splitCategoryPath(rawName);
   const target = normalizeCategoryName(category);
+  const includeHidden = options.includeHidden ?? false;
+  // Prefer active matches, then allow hidden (imports warn when used)
+  const active = plan.categories.find(
+    (c) =>
+      !c.deletedAt &&
+      !c.hidden &&
+      !c.isArchived &&
+      normalizeCategoryName(c.name) === target,
+  );
+  if (active) return active;
+  if (!includeHidden) return undefined;
   return plan.categories.find(
-    (c) => !c.hidden && normalizeCategoryName(c.name) === target,
+    (c) =>
+      !c.deletedAt &&
+      (c.hidden || c.isArchived) &&
+      normalizeCategoryName(c.name) === target,
   );
 }
 
@@ -96,9 +111,24 @@ export function applyCategoryMatching(
       };
     }
 
-    const existing = findCategoryByName(plan, row.categoryName);
+    const existing =
+      findCategoryByName(plan, row.categoryName) ??
+      findCategoryByName(plan, row.categoryName, { includeHidden: true });
     if (existing) {
-      return { ...row, categoryId: existing.id, status: "ready" as const };
+      const warnHidden =
+        existing.hidden || existing.isArchived
+          ? "Matched a hidden/archived category."
+          : null;
+      return {
+        ...row,
+        categoryId: existing.id,
+        status: "ready" as const,
+        errors: warnHidden
+          ? row.errors.includes(warnHidden)
+            ? row.errors
+            : [...row.errors, warnHidden]
+          : row.errors,
+      };
     }
 
     if (createMissing) {

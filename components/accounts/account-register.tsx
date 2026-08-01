@@ -167,7 +167,9 @@ export function AccountRegister({ accountId }: { accountId: string }) {
       {showForm && !closed && (
         <TransactionForm
           accountId={accountId}
-          categories={plan.categories}
+          categories={plan.categories.filter(
+            (c) => !c.hidden && !c.deletedAt && !c.isArchived,
+          )}
           onCancel={() => setShowForm(false)}
           onSubmit={(data) => {
             addTransaction(data);

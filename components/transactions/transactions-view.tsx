@@ -13,6 +13,8 @@ import { AccountSelect } from "@/components/shared/account-select";
 import type { Account, ClearedStatus } from "@/lib/types/budget";
 import { EditTransactionModal } from "@/components/transactions/edit-transaction-modal";
 import { TransactionActions } from "@/components/transactions/transaction-actions";
+import { CategorySelect } from "@/components/shared/category-select";
+import { getSelectableCategories } from "@/lib/categories/lifecycle";
 
 export function TransactionsView() {
   const searchParams = useSearchParams();
@@ -118,9 +120,10 @@ export function TransactionsView() {
           className="input"
         >
           <option value="">All categories</option>
-          {plan.categories.map((c) => (
+          {getSelectableCategories(plan, { includeHidden: true }).map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
+              {c.hidden ? " (hidden)" : ""}
             </option>
           ))}
         </select>
@@ -238,7 +241,7 @@ export function TransactionsView() {
           {mode === "transaction" ? (
             <AddTxnForm
               accounts={getActiveAccounts(plan.accounts)}
-              categories={plan.categories}
+              plan={plan}
               onSubmit={(data) => {
                 try {
                   addTransaction(data);
@@ -432,11 +435,11 @@ function ModeButton({
 
 function AddTxnForm({
   accounts,
-  categories,
+  plan,
   onSubmit,
 }: {
   accounts: Account[];
-  categories: { id: string; name: string }[];
+  plan: import("@/lib/types/budget").BudgetPlan;
   onSubmit: (data: {
     accountId: string;
     date: string;
@@ -494,18 +497,11 @@ function AddTxnForm({
         placeholder="Payee"
         className="input"
       />
-      <select
+      <CategorySelect
+        plan={plan}
         value={categoryId}
-        onChange={(e) => setCategoryId(e.target.value)}
-        className="input"
-      >
-        <option value="">Ready to Assign / none</option>
-        {categories.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.name}
-          </option>
-        ))}
-      </select>
+        onChange={setCategoryId}
+      />
       <select
         value={direction}
         onChange={(e) => setDirection(e.target.value as "outflow" | "inflow")}

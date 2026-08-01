@@ -7,9 +7,14 @@ import { MoneyText } from "@/components/shared/money-text";
 import { DisabledAction } from "@/components/shared/disabled-action";
 import { formatDisplayDate } from "@/lib/dates";
 
-export function CategoryInspector() {
+export function CategoryInspector({
+  onEditCategory,
+}: {
+  onEditCategory?: (categoryId: string) => void;
+} = {}) {
   const selectedCategoryId = useBudgetStore((s) => s.selectedCategoryId);
   const setSelectedCategory = useBudgetStore((s) => s.setSelectedCategory);
+  const hideCategory = useBudgetStore((s) => s.hideCategory);
   const plan = useBudgetStore((s) => s.plan);
   const monthKey = useBudgetStore((s) => s.selectedMonthKey);
 
@@ -25,6 +30,12 @@ export function CategoryInspector() {
   const meta = plan.categories.find((c) => c.id === selectedCategoryId);
   const target = plan.targets.find((t) => t.categoryId === selectedCategoryId);
 
+  // Hidden categories still openable from settings — fall back to meta
+  const displayName = category?.name ?? meta?.name;
+  const displayGroup =
+    group?.name ??
+    plan.categoryGroups.find((g) => g.id === meta?.groupId)?.name;
+
   const recent = plan.transactions
     .filter(
       (t) =>
@@ -34,7 +45,11 @@ export function CategoryInspector() {
     .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, 6);
 
-  if (!category || !group) return null;
+  if (!meta || !displayName) return null;
+
+  const availableCents = category?.availableCents ?? 0;
+  const assignedCents = category?.assignedCents ?? 0;
+  const activityCents = category?.activityCents ?? 0;
 
   return (
     <>
@@ -47,13 +62,13 @@ export function CategoryInspector() {
       <aside
         className="fixed inset-x-0 bottom-0 z-50 max-h-[85dvh] overflow-y-auto rounded-t-2xl border border-border bg-surface shadow-xl md:inset-y-0 md:right-0 md:left-auto md:max-h-none md:w-[360px] md:rounded-none md:border-l"
         role="dialog"
-        aria-label={`${category.name} details`}
+        aria-label={`${displayName} details`}
       >
         <div className="sticky top-0 flex items-center justify-between border-b border-border bg-surface px-4 py-3">
           <div>
-            <p className="text-xs text-muted">{group.name}</p>
+            <p className="text-xs text-muted">{displayGroup ?? "Category"}</p>
             <h2 className="text-lg font-semibold tracking-tight">
-              {category.name}
+              {displayName}
             </h2>
           </div>
           <button
@@ -68,12 +83,12 @@ export function CategoryInspector() {
 
         <div className="space-y-5 p-4">
           <div className="grid grid-cols-3 gap-3">
-            <Metric label="Available" cents={category.availableCents} />
-            <Metric label="Assigned" cents={category.assignedCents} />
-            <Metric label="Activity" cents={category.activityCents} signed />
+            <Metric label="Available" cents={availableCents} />
+            <Metric label="Assigned" cents={assignedCents} />
+            <Metric label="Activity" cents={activityCents} signed />
           </div>
 
-          {category.overspendingType && (
+          {category?.overspendingType && (
             <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <p>
@@ -93,10 +108,10 @@ export function CategoryInspector() {
                 <MoneyText cents={target.amountCents} /> /{" "}
                 {target.type.replaceAll("_", " ")}
               </p>
-              {category.underfundedCents > 0 && (
+              {(category?.underfundedCents ?? 0) > 0 && (
                 <p className="mt-1 text-sm text-warning">
                   Underfunded by{" "}
-                  <MoneyText cents={category.underfundedCents} />
+                  <MoneyText cents={category!.underfundedCents} />
                 </p>
               )}
             </div>
@@ -138,13 +153,25 @@ export function CategoryInspector() {
           </div>
 
           <div className="flex flex-wrap gap-2">
+            {onEditCategory && (
+              <button
+                type="button"
+                onClick={() => onEditCategory(selectedCategoryId)}
+                className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
+              >
+                Edit Category
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => hideCategory(selectedCategoryId)}
+              className="rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-black/5"
+            >
+              Hide
+            </button>
             <DisabledAction
               label="Move Money"
               reason="Move Money between categories ships next."
-            />
-            <DisabledAction
-              label="Edit Target"
-              reason="Target editor ships with the Goals increment."
             />
           </div>
         </div>
