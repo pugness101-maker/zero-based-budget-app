@@ -3,6 +3,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createDemoPlan } from "@/lib/seed/demo-plan";
+import {
+  applyClearData,
+  type AfterClearChoice,
+  type ClearDataScope,
+} from "@/lib/data/clear-data";
 import { countBackupRecords } from "@/lib/exports/full-backup";
 import { parseFullBackup } from "@/lib/exports/full-backup";
 import {
@@ -280,8 +285,21 @@ interface BudgetState {
       | { linkType: "category"; categoryId: string }
       | { linkType: "account"; accountId: string },
   ) => { ok: boolean; error?: string };
-  createBackup: (label: string, reason: BackupRecord["reason"], importBatchId?: string) => string;
+  createBackup: (
+    label: string,
+    reason: BackupRecord["reason"],
+    importBatchId?: string,
+    extras?: BackupRecord["extras"],
+  ) => string;
   deleteBackup: (backupId: string) => void;
+  /** Pre-clear backup id available for immediate Undo Clear Data */
+  lastClearBackupId: string | null;
+  clearData: (input: {
+    scope: ClearDataScope;
+    after: AfterClearChoice;
+  }) => { ok: true; backupId: string } | { ok: false; error: string };
+  undoClearData: () => { ok: boolean; error?: string };
+  getLatestBackupDate: () => string | null;
   restoreStoredBackup: (
     backupId: string,
     mode: MergeMode,
@@ -543,6 +561,7 @@ export const useBudgetStore = create<BudgetState>()(
       importBatches: [],
       importRowsByBatch: {},
       backups: [],
+      lastClearBackupId: null,
       auditEvents: [],
       mappingPresets: BUILTIN_MAPPING_PRESETS,
       payeeAliasRules: {},
@@ -1145,7 +1164,7 @@ export const useBudgetStore = create<BudgetState>()(
         return { ok: true };
       },
 
-      createBackup: (label, reason, importBatchId) => {
+      createBackup: (label, reason, importBatchId, extras) => {
         const id = newId("bak");
         const planSnapshot = structuredClone(get().plan);
         const backup: BackupRecord = {
@@ -1157,11 +1176,141 @@ export const useBudgetStore = create<BudgetState>()(
           planSnapshot,
           importBatchId,
           recordCount: countBackupRecords(planSnapshot),
+          extras: extras ? structuredClone(extras) : undefined,
         };
         set((s) => ({
           backups: pruneBackups([backup, ...s.backups]),
         }));
         return id;
+      },
+
+      getLatestBackupDate: () => {
+        const latest = get().backups[0];
+        return latest?.createdAt ?? null;
+      },
+
+      clearData: ({ scope, after }) => {
+        // Never touches auth tokens, subscription state, or env/secrets —
+        // only the local budget persist slice below.
+        const state = get();
+        const extras: NonNullable<BackupRecord["extras"]> = {
+          payeeAliasRules: { ...state.payeeAliasRules },
+          categoryImportRules: { ...state.categoryImportRules },
+          importBatches: structuredClone(state.importBatches),
+          importRowsByBatch: structuredClone(state.importRowsByBatch),
+          auditEvents: structuredClone(state.auditEvents),
+          importPromptDismissed: state.importPromptDismissed,
+        };
+        const backupId = get().createBackup(
+          `Before clear data (${scope})`,
+          "pre_clear",
+          undefined,
+          extras,
+        );
+
+        const result = applyClearData(
+          {
+            plan: state.plan,
+            importBatches: state.importBatches,
+            importRowsByBatch: state.importRowsByBatch,
+            payeeAliasRules: state.payeeAliasRules,
+            categoryImportRules: state.categoryImportRules,
+            auditEvents: state.auditEvents,
+            importPromptDismissed: state.importPromptDismissed,
+            selectedMonthKey: state.selectedMonthKey,
+            selectedCategoryId: state.selectedCategoryId,
+            undoStack: state.undoStack,
+            redoStack: state.redoStack,
+          },
+          scope,
+          after,
+        );
+
+        const clearAudit = auditEvent({
+          action: "clear_data",
+          entityType: "plan",
+          entityId: state.plan.id,
+          summary: `Cleared data: ${scope}`,
+          metadata: {
+            clearType: scope,
+            sectionsCleared: result.sectionsCleared,
+            recordCounts: result.countsBefore,
+            backupId,
+            user: "demo",
+            after,
+          },
+        });
+
+        set({
+          plan: result.plan,
+          importBatches: result.importBatches,
+          importRowsByBatch: result.importRowsByBatch,
+          payeeAliasRules: result.payeeAliasRules,
+          categoryImportRules: result.categoryImportRules,
+          auditEvents: [clearAudit, ...result.auditEvents].slice(0, 100),
+          importPromptDismissed: result.importPromptDismissed,
+          selectedMonthKey: result.selectedMonthKey,
+          selectedCategoryId: result.selectedCategoryId,
+          undoStack: [],
+          redoStack: [],
+          lastClearBackupId: backupId,
+          toastMessage: `Data cleared (${scope}). Undo available.`,
+          persistRevision: state.persistRevision + 1,
+        });
+
+        return { ok: true as const, backupId };
+      },
+
+      undoClearData: () => {
+        const backupId = get().lastClearBackupId;
+        if (!backupId) {
+          return { ok: false, error: "No clear action to undo." };
+        }
+        const backup = get().backups.find((b) => b.id === backupId);
+        if (!backup) {
+          return {
+            ok: false,
+            error: "Pre-clear backup was removed and cannot be restored.",
+          };
+        }
+
+        const extras = backup.extras;
+        set((s) => ({
+          plan: structuredClone(backup.planSnapshot),
+          selectedMonthKey: backup.planSnapshot.workingMonthKey,
+          selectedCategoryId: null,
+          payeeAliasRules: extras
+            ? { ...extras.payeeAliasRules }
+            : s.payeeAliasRules,
+          categoryImportRules: extras
+            ? { ...extras.categoryImportRules }
+            : s.categoryImportRules,
+          importBatches: extras
+            ? structuredClone(extras.importBatches)
+            : s.importBatches,
+          importRowsByBatch: extras
+            ? structuredClone(extras.importRowsByBatch)
+            : s.importRowsByBatch,
+          importPromptDismissed: extras
+            ? extras.importPromptDismissed
+            : s.importPromptDismissed,
+          auditEvents: [
+            auditEvent({
+              action: "restore",
+              entityType: "backup",
+              entityId: backupId,
+              summary: "Undo clear data",
+              metadata: { backupId },
+            }),
+            ...(extras ? extras.auditEvents : s.auditEvents),
+          ].slice(0, 100),
+          undoStack: [],
+          redoStack: [],
+          lastClearBackupId: null,
+          toastMessage: "Clear data undone — previous state restored",
+          persistRevision: s.persistRevision + 1,
+        }));
+        return { ok: true };
       },
 
       deleteBackup: (backupId) => {
@@ -2944,6 +3093,7 @@ export const useBudgetStore = create<BudgetState>()(
         importBatches: state.importBatches,
         importRowsByBatch: state.importRowsByBatch,
         backups: pruneBackups(state.backups),
+        lastClearBackupId: state.lastClearBackupId,
         auditEvents: state.auditEvents.slice(0, 50),
         mappingPresets: state.mappingPresets,
         payeeAliasRules: state.payeeAliasRules,

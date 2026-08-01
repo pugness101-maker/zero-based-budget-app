@@ -149,7 +149,17 @@ export type BackupReason =
   | "pre_account_close"
   | "pre_category_merge"
   | "pre_destructive_migration"
+  | "pre_clear"
   | "automatic";
+
+export interface BackupExtras {
+  payeeAliasRules: Record<string, string>;
+  categoryImportRules: Record<string, string>;
+  importBatches: ImportBatch[];
+  importRowsByBatch: Record<string, ImportRow[]>;
+  auditEvents: AuditEvent[];
+  importPromptDismissed: boolean;
+}
 
 export interface BackupRecord {
   id: string;
@@ -161,6 +171,8 @@ export interface BackupRecord {
   importBatchId?: string;
   /** Accounts + transactions + categories + … for UI */
   recordCount?: number;
+  /** Full non-plan state for Undo Clear Data */
+  extras?: BackupExtras;
 }
 
 export const MAX_STORED_BACKUPS = 10;
@@ -191,7 +203,8 @@ export type AuditAction =
   | "category_edit"
   | "category_delete"
   | "category_merge"
-  | "category_group_change";
+  | "category_group_change"
+  | "clear_data";
 
 export interface AuditEvent {
   id: string;

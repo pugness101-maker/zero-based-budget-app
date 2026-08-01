@@ -12,6 +12,7 @@ const AUTOMATIC_REASONS = new Set<BackupReason>([
   "pre_account_close",
   "pre_category_merge",
   "pre_destructive_migration",
+  "pre_clear",
   "automatic",
 ]);
 

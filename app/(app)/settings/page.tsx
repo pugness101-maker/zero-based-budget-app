@@ -14,7 +14,7 @@ import { ImportWizard } from "@/components/imports/import-wizard";
 import { AccountsSettings } from "@/components/settings/accounts-settings";
 import { CategoriesSettings } from "@/components/settings/categories-settings";
 import { PayeesSettings } from "@/components/settings/payees-settings";
-import { ExportPanel } from "@/components/settings/export-panel";
+import { DataManagement } from "@/components/settings/data-management";
 import { TrackingAccountsSettings } from "@/components/settings/tracking-accounts-settings";
 
 const moreLinks = [
@@ -28,9 +28,7 @@ export default function SettingsPage() {
   const plan = useBudgetStore((s) => s.plan);
   const hideBalances = plan.preferences.hideBalances;
   const toggleHideBalances = useBudgetStore((s) => s.toggleHideBalances);
-  const resetDemoData = useBudgetStore((s) => s.resetDemoData);
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [resetConfirm, setResetConfirm] = useState("");
 
   return (
     <div className="px-4 py-4 md:px-6 max-w-2xl space-y-6 overflow-x-hidden">
@@ -69,7 +67,7 @@ export default function SettingsPage() {
         </ul>
       </section>
 
-      <ExportPanel onOpenImport={() => setWizardOpen(true)} />
+      <DataManagement onOpenImport={() => setWizardOpen(true)} />
 
       <AccountsSettings />
 
@@ -90,40 +88,6 @@ export default function SettingsPage() {
             className="h-4 w-4 accent-[var(--accent)]"
           />
         </label>
-      </section>
-
-      <section className="rounded-xl border border-border bg-surface p-4 space-y-3">
-        <h2 className="text-sm font-semibold">Demo data</h2>
-        <p className="text-sm text-muted">
-          Plan: {plan.name}. Imported and edited data stays until you reset.
-          Refreshing or reopening the browser does not restore seed data.
-        </p>
-        <label className="block text-xs text-muted space-y-1">
-          Type RESET to enable
-          <input
-            value={resetConfirm}
-            onChange={(e) => setResetConfirm(e.target.value)}
-            placeholder="RESET"
-            className="mt-1 w-full rounded-md border border-border px-2 py-1.5 text-sm"
-          />
-        </label>
-        <button
-          type="button"
-          disabled={resetConfirm !== "RESET"}
-          onClick={() => {
-            if (
-              confirm(
-                "This permanently replaces your local plan with the college-student demo. A backup is created first. Continue?",
-              )
-            ) {
-              resetDemoData();
-              setResetConfirm("");
-            }
-          }}
-          className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          Reset Demo Data
-        </button>
       </section>
 
       <section className="rounded-xl border border-border bg-surface p-4 space-y-2">
