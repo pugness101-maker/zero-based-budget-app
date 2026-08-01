@@ -113,9 +113,26 @@ export interface ScheduledTransaction {
   pausedByAccountClose?: boolean;
 }
 
+export type GoalLinkType = "category" | "account";
+
+/** Canonical + legacy goal types (legacy normalized by migratePlanTargets). */
 export type TargetType =
-  | "weekly_fixed"
   | "monthly_fixed"
+  | "monthly_refill"
+  | "weekly_savings"
+  | "target_by_date"
+  | "maintain_category_balance"
+  | "custom_repeating"
+  | "reach_account_balance"
+  | "maintain_minimum_balance"
+  | "account_save_by_date"
+  | "debt_payoff"
+  | "monthly_account_contribution"
+  | "investment_contribution"
+  | "emergency_fund_balance"
+  | "custom_account_target"
+  // Legacy values still accepted until migrated
+  | "weekly_fixed"
   | "refill"
   | "save_by_date"
   | "custom_balance"
@@ -124,13 +141,26 @@ export type TargetType =
 
 export interface Target {
   id: string;
-  categoryId: string;
+  /** Display name; defaults from linked category/account when empty */
+  name?: string;
+  linkType: GoalLinkType;
+  categoryId: string | null;
+  accountId: string | null;
   type: TargetType;
+  /** Target amount (cents) */
   amountCents: Cents;
+  baselineAmountCents?: Cents;
   dueDate?: string;
+  repeatRule?: string;
+  /** @deprecated use repeatRule */
   cadence?: string;
   notes?: string;
+  /** Archived when true */
   paused?: boolean;
+  includeTransfers?: boolean;
+  includeAdjustments?: boolean;
+  /** When true, another account goal may share the same accountId */
+  allowDuplicateAccountGoal?: boolean;
 }
 
 export interface Payee {

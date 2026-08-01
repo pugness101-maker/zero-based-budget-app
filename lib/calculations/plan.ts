@@ -261,7 +261,12 @@ export function getTargetForCategory(
   targets: Target[],
   categoryId: string,
 ): Target | undefined {
-  return targets.find((t) => t.categoryId === categoryId && !t.paused);
+  return targets.find(
+    (t) =>
+      !t.paused &&
+      t.linkType !== "account" &&
+      t.categoryId === categoryId,
+  );
 }
 
 export function buildPlanMonthSummary(

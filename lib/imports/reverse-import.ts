@@ -59,7 +59,9 @@ export function reverseImportBatch(input: {
           !catIds.has(b.categoryId) &&
           !(b.source === "ynab_import" && input.batch.importType === "ynab_zip"),
       ),
-      targets: input.plan.targets.filter((t) => !catIds.has(t.categoryId)),
+      targets: input.plan.targets.filter(
+        (t) => !t.categoryId || !catIds.has(t.categoryId),
+      ),
     };
 
     return {

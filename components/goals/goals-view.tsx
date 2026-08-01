@@ -1,28 +1,44 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Pencil, Trash2, Wrench } from "lucide-react";
+import Link from "next/link";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  Wrench,
+  Archive,
+  ExternalLink,
+} from "lucide-react";
 import { useBudgetStore } from "@/lib/store/budget-store";
 import {
   buildGoalsSummary,
   filterGoals,
-  isDateBasedGoalType,
   type GoalFilter,
   type GoalProgress,
 } from "@/lib/calculations/goals";
 import { detectGoalIssues } from "@/lib/goals/repair";
+import {
+  goalTypeLabel,
+  goalTypesForLink,
+  isContributionGoalType,
+  isDateBasedGoalType,
+} from "@/lib/goals/types";
+import { GoalCategoryCombobox } from "@/components/goals/goal-category-combobox";
+import { GoalAccountCombobox } from "@/components/goals/goal-account-combobox";
 import { MoneyText } from "@/components/shared/money-text";
 import { formatDisplayDate } from "@/lib/dates";
 import { parseMoneyInput } from "@/lib/money";
 import { cn } from "@/lib/utils";
-import type { TargetType } from "@/lib/types/budget";
+import type { GoalLinkType, TargetType } from "@/lib/types/budget";
 
 const FILTERS: { id: GoalFilter; label: string }[] = [
-  { id: "all", label: "All" },
+  { id: "all", label: "All Goals" },
+  { id: "category", label: "Category Goals" },
+  { id: "account", label: "Account Goals" },
   { id: "on_track", label: "On Track" },
   { id: "underfunded", label: "Underfunded" },
   { id: "due_soon", label: "Due Soon" },
-  { id: "overdue", label: "Overdue" },
   { id: "completed", label: "Completed" },
   { id: "needs_review", label: "Needs Review" },
 ];
@@ -36,22 +52,13 @@ const STATUS_LABEL: Record<GoalProgress["status"], string> = {
   needs_review: "Needs Review",
 };
 
-const TARGET_TYPES: { value: TargetType; label: string }[] = [
-  { value: "monthly_fixed", label: "Monthly fixed" },
-  { value: "weekly_fixed", label: "Weekly fixed" },
-  { value: "refill", label: "Refill up to" },
-  { value: "save_by_date", label: "Save by date" },
-  { value: "custom_balance", label: "Custom balance" },
-  { value: "debt_payment", label: "Debt payment" },
-  { value: "custom", label: "Custom" },
-];
-
 export function GoalsView() {
   const plan = useBudgetStore((s) => s.plan);
   const monthKey = useBudgetStore((s) => s.selectedMonthKey);
   const addTarget = useBudgetStore((s) => s.addTarget);
   const updateTarget = useBudgetStore((s) => s.updateTarget);
   const deleteTarget = useBudgetStore((s) => s.deleteTarget);
+  const archiveTarget = useBudgetStore((s) => s.archiveTarget);
   const repairDuplicateGoals = useBudgetStore((s) => s.repairDuplicateGoals);
   const reconnectGoal = useBudgetStore((s) => s.reconnectGoal);
 
@@ -60,7 +67,8 @@ export function GoalsView() {
     null | { mode: "add" } | { mode: "edit"; targetId: string }
   >(null);
   const [reconnectFor, setReconnectFor] = useState<string | null>(null);
-  const [reconnectCategoryId, setReconnectCategoryId] = useState("");
+  const [reconnectLink, setReconnectLink] = useState<GoalLinkType>("category");
+  const [reconnectId, setReconnectId] = useState("");
   const [repairMessage, setRepairMessage] = useState<string | null>(null);
 
   const summary = useMemo(
@@ -79,7 +87,7 @@ export function GoalsView() {
   function confirmDelete(targetId: string) {
     if (
       !confirm(
-        "Delete this goal? The category, transactions, and budget history will not be deleted.",
+        "Delete this goal? The category, account, transactions, and budget history will not be deleted.",
       )
     ) {
       return;
@@ -96,8 +104,8 @@ export function GoalsView() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Goals</h1>
           <p className="mt-1 text-sm text-muted">
-            Targets for the selected budget month. Monthly goals use assigned
-            amounts; savings and date-based goals use category available.
+            Link goals to categories or accounts. Category goals use assigned or
+            available; account goals use balances and contributions.
           </p>
         </div>
         <button
@@ -118,8 +126,8 @@ export function GoalsView() {
                 {issues.length} goal{issues.length === 1 ? "" : "s"} need review
               </p>
               <p className="text-xs text-muted mt-0.5">
-                Duplicate or orphaned goals are not auto-assigned to
-                Uncategorized. Keep one per category, reconnect, or delete.
+                Broken links stay Needs Review — they are never auto-assigned to
+                Uncategorized.
               </p>
             </div>
             <button
@@ -132,8 +140,8 @@ export function GoalsView() {
                 }
                 setRepairMessage(
                   result.removedCount
-                    ? `Removed ${result.removedCount} duplicate goal(s). Orphans still need reconnect or delete.`
-                    : "No duplicate goals to remove. Reconnect or delete orphans manually.",
+                    ? `Removed ${result.removedCount} duplicate goal(s).`
+                    : "No duplicate goals to remove.",
                 );
               }}
               className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium hover:bg-black/5"
@@ -180,23 +188,6 @@ export function GoalsView() {
             )}
           >
             {f.label}
-            {f.id !== "all" && (
-              <span className="ml-1 opacity-80">
-                (
-                {f.id === "on_track"
-                  ? summary.onTrackCount
-                  : f.id === "underfunded"
-                    ? summary.underfundedCount
-                    : f.id === "due_soon"
-                      ? summary.dueSoonCount
-                      : f.id === "overdue"
-                        ? summary.overdueCount
-                        : f.id === "needs_review"
-                          ? summary.needsReviewCount
-                          : summary.completedCount}
-                )
-              </span>
-            )}
           </button>
         ))}
       </div>
@@ -244,12 +235,17 @@ export function GoalsView() {
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="text-xs text-muted">{goal.groupName}</p>
+                  <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                    <LinkBadge linkType={goal.linkType} />
+                    <StatusBadge status={goal.status} />
+                  </div>
                   <h2 className="font-semibold tracking-tight truncate">
-                    {goal.categoryName}
+                    {goal.name}
                   </h2>
+                  <p className="text-xs text-muted truncate">
+                    {goal.linkedName} · {goal.groupOrSection}
+                  </p>
                 </div>
-                <StatusBadge status={goal.status} />
               </div>
 
               <div className="grid grid-cols-3 gap-2 text-sm">
@@ -260,24 +256,12 @@ export function GoalsView() {
 
               {goal.overfundedCents > 0 && (
                 <p className="text-xs text-success">
-                  Overfunded by{" "}
-                  <MoneyText cents={goal.overfundedCents} />
+                  Overfunded by <MoneyText cents={goal.overfundedCents} />
                 </p>
               )}
               {goal.overspendingCents > 0 && (
                 <p className="text-xs text-danger">
-                  Overspending{" "}
-                  <MoneyText cents={goal.overspendingCents} />
-                </p>
-              )}
-              {goal.isDuplicate && (
-                <p className="text-xs text-warning">
-                  Duplicate goal for this category.
-                </p>
-              )}
-              {goal.isBrokenLink && (
-                <p className="text-xs text-warning">
-                  Broken category link — reconnect or delete.
+                  Overspending <MoneyText cents={goal.overspendingCents} />
                 </p>
               )}
 
@@ -313,49 +297,83 @@ export function GoalsView() {
                 </div>
               </div>
 
+              <p className="text-xs text-muted">{goalTypeLabel(goal.type)}</p>
+
               {reconnectFor === goal.targetId && (
-                <div className="flex flex-col gap-2 rounded-lg border border-border p-2">
+                <div className="space-y-2 rounded-lg border border-border p-2">
                   <select
                     className="input"
-                    value={reconnectCategoryId}
-                    onChange={(e) => setReconnectCategoryId(e.target.value)}
+                    value={reconnectLink}
+                    onChange={(e) => {
+                      setReconnectLink(e.target.value as GoalLinkType);
+                      setReconnectId("");
+                    }}
                   >
-                    <option value="">Choose category…</option>
-                    {plan.categories
-                      .filter(
-                        (c) =>
-                          !c.hidden &&
-                          !c.deletedAt &&
-                          !c.isArchived &&
-                          !plan.targets.some(
-                            (t) =>
-                              !t.paused &&
-                              t.categoryId === c.id &&
-                              t.id !== goal.targetId,
-                          ),
-                      )
-                      .map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
+                    <option value="category">Category</option>
+                    <option value="account">Account</option>
                   </select>
+                  {reconnectLink === "category" ? (
+                    <GoalCategoryCombobox
+                      plan={plan}
+                      value={reconnectId}
+                      onChange={setReconnectId}
+                      excludeCategoryIds={
+                        new Set(
+                          plan.targets
+                            .filter(
+                              (t) =>
+                                !t.paused &&
+                                t.linkType === "category" &&
+                                t.categoryId &&
+                                t.id !== goal.targetId,
+                            )
+                            .map((t) => t.categoryId!),
+                        )
+                      }
+                    />
+                  ) : (
+                    <GoalAccountCombobox
+                      plan={plan}
+                      value={reconnectId}
+                      onChange={setReconnectId}
+                      excludeAccountIds={
+                        new Set(
+                          plan.targets
+                            .filter(
+                              (t) =>
+                                !t.paused &&
+                                t.linkType === "account" &&
+                                t.accountId &&
+                                t.id !== goal.targetId &&
+                                !t.allowDuplicateAccountGoal,
+                            )
+                            .map((t) => t.accountId!),
+                        )
+                      }
+                    />
+                  )}
                   <div className="flex gap-2">
                     <button
                       type="button"
                       className="rounded-lg bg-accent px-2 py-1 text-xs font-medium text-white"
                       onClick={() => {
-                        if (!reconnectCategoryId) return;
-                        const result = reconnectGoal(
-                          goal.targetId,
-                          reconnectCategoryId,
-                        );
+                        if (!reconnectId) return;
+                        const result =
+                          reconnectLink === "category"
+                            ? reconnectGoal(goal.targetId, {
+                                linkType: "category",
+                                categoryId: reconnectId,
+                              })
+                            : reconnectGoal(goal.targetId, {
+                                linkType: "account",
+                                accountId: reconnectId,
+                              });
                         if (!result.ok) {
                           alert(result.error);
                           return;
                         }
                         setReconnectFor(null);
-                        setReconnectCategoryId("");
+                        setReconnectId("");
                       }}
                     >
                       Reconnect
@@ -363,10 +381,7 @@ export function GoalsView() {
                     <button
                       type="button"
                       className="rounded-lg border border-border px-2 py-1 text-xs"
-                      onClick={() => {
-                        setReconnectFor(null);
-                        setReconnectCategoryId("");
-                      }}
+                      onClick={() => setReconnectFor(null)}
                     >
                       Cancel
                     </button>
@@ -374,48 +389,78 @@ export function GoalsView() {
                 </div>
               )}
 
-              <div className="flex items-center justify-between gap-2 pt-1">
-                <p className="text-xs text-muted capitalize">
-                  {goal.type.replaceAll("_", " ")}
-                </p>
-                <div className="flex flex-wrap items-center justify-end gap-1">
-                  {(goal.isBrokenLink || goal.isDuplicate) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setReconnectFor(goal.targetId);
-                        setReconnectCategoryId("");
-                      }}
-                      className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted hover:bg-black/5"
-                    >
-                      Reconnect
-                    </button>
-                  )}
+              <div className="flex flex-wrap items-center gap-1 pt-1">
+                {goal.linkType === "category" && goal.categoryId && (
+                  <Link
+                    href={`/plan?category=${goal.categoryId}`}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted hover:bg-black/5"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    View Category
+                  </Link>
+                )}
+                {goal.linkType === "account" && goal.accountId && (
+                  <Link
+                    href={`/accounts/${goal.accountId}`}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted hover:bg-black/5"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    View Account
+                  </Link>
+                )}
+                {(goal.isBrokenLink || goal.isDuplicate) && (
                   <button
                     type="button"
-                    onClick={() =>
-                      setEditor({ mode: "edit", targetId: goal.targetId })
-                    }
-                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-accent hover:bg-accent-muted"
+                    onClick={() => {
+                      setReconnectFor(goal.targetId);
+                      setReconnectLink(goal.linkType);
+                      setReconnectId("");
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted hover:bg-black/5"
                   >
-                    <Pencil className="h-3.5 w-3.5" />
-                    Edit
+                    Reconnect
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => confirmDelete(goal.targetId)}
-                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-danger hover:bg-danger/10"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Delete
-                  </button>
-                </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEditor({ mode: "edit", targetId: goal.targetId })
+                  }
+                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-accent hover:bg-accent-muted"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => archiveTarget(goal.targetId, true)}
+                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted hover:bg-black/5"
+                >
+                  <Archive className="h-3.5 w-3.5" />
+                  Archive
+                </button>
+                <button
+                  type="button"
+                  onClick={() => confirmDelete(goal.targetId)}
+                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-danger hover:bg-danger/10"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
+                </button>
               </div>
             </li>
           ))}
         </ul>
       )}
     </div>
+  );
+}
+
+function LinkBadge({ linkType }: { linkType: GoalLinkType }) {
+  return (
+    <span className="shrink-0 rounded-md bg-black/5 px-2 py-0.5 text-[11px] font-semibold text-muted">
+      {linkType === "account" ? "Account Goal" : "Category Goal"}
+    </span>
   );
 }
 
@@ -477,8 +522,8 @@ function EmptyGoals({
       </h2>
       <p className="mt-2 text-sm text-muted max-w-sm mx-auto">
         {hasAny
-          ? "Try another filter, or add a new goal for a category."
-          : "Create a target for a category to track funding progress this month."}
+          ? "Try another filter, or add a new goal."
+          : "Create a goal linked to a category or account."}
       </p>
       <button
         type="button"
@@ -504,11 +549,18 @@ function GoalEditor({
   onClose: () => void;
   onDelete?: () => void;
   onSave: (data: {
-    categoryId: string;
+    name?: string;
+    linkType: GoalLinkType;
+    categoryId?: string | null;
+    accountId?: string | null;
     type: TargetType;
     amountCents: number;
+    baselineAmountCents?: number;
     dueDate?: string;
+    repeatRule?: string;
     notes?: string;
+    includeTransfers?: boolean;
+    includeAdjustments?: boolean;
   }) => void;
 }) {
   const plan = useBudgetStore((s) => s.plan);
@@ -516,34 +568,82 @@ function GoalEditor({
     ? plan.targets.find((t) => t.id === targetId)
     : undefined;
 
-  const categoriesWithGoals = new Set(
-    plan.targets
-      .filter((t) => !t.paused && t.id !== existing?.id)
-      .map((t) => t.categoryId),
+  const [linkType, setLinkType] = useState<GoalLinkType>(
+    existing?.linkType ?? "category",
   );
-  const categoryOptions = plan.categories.filter(
-    (c) =>
-      !c.hidden &&
-      !c.deletedAt &&
-      !c.isArchived &&
-      (mode === "edit" || !categoriesWithGoals.has(c.id)),
-  );
-
-  const [categoryId, setCategoryId] = useState(
-    existing?.categoryId &&
-      categoryOptions.some((c) => c.id === existing.categoryId)
-      ? existing.categoryId
-      : (categoryOptions[0]?.id ?? ""),
-  );
+  const [categoryId, setCategoryId] = useState(existing?.categoryId ?? "");
+  const [accountId, setAccountId] = useState(existing?.accountId ?? "");
   const [type, setType] = useState<TargetType>(
     existing?.type ?? "monthly_fixed",
   );
+  const [name, setName] = useState(existing?.name ?? "");
+  const [nameTouched, setNameTouched] = useState(Boolean(existing?.name));
   const [amount, setAmount] = useState(
     existing ? (existing.amountCents / 100).toFixed(2) : "",
   );
+  const [baseline, setBaseline] = useState(
+    existing?.baselineAmountCents != null
+      ? (existing.baselineAmountCents / 100).toFixed(2)
+      : "",
+  );
   const [dueDate, setDueDate] = useState(existing?.dueDate ?? "");
+  const [repeatRule, setRepeatRule] = useState(
+    existing?.repeatRule ?? existing?.cadence ?? "",
+  );
   const [notes, setNotes] = useState(existing?.notes ?? "");
+  const [includeTransfers, setIncludeTransfers] = useState(
+    existing?.includeTransfers ?? true,
+  );
+  const [includeAdjustments, setIncludeAdjustments] = useState(
+    existing?.includeAdjustments ?? false,
+  );
   const [error, setError] = useState<string | null>(null);
+
+  const typeOptions = goalTypesForLink(linkType);
+
+  const excludeCategoryIds = useMemo(
+    () =>
+      new Set(
+        plan.targets
+          .filter(
+            (t) =>
+              !t.paused &&
+              t.linkType === "category" &&
+              t.categoryId &&
+              t.id !== existing?.id,
+          )
+          .map((t) => t.categoryId!),
+      ),
+    [plan.targets, existing?.id],
+  );
+
+  const excludeAccountIds = useMemo(
+    () =>
+      new Set(
+        plan.targets
+          .filter(
+            (t) =>
+              !t.paused &&
+              t.linkType === "account" &&
+              t.accountId &&
+              t.id !== existing?.id &&
+              !t.allowDuplicateAccountGoal,
+          )
+          .map((t) => t.accountId!),
+      ),
+    [plan.targets, existing?.id],
+  );
+
+  function applyDefaultName(nextLink: GoalLinkType, id: string) {
+    if (nameTouched) return;
+    if (nextLink === "category") {
+      const cat = plan.categories.find((c) => c.id === id);
+      if (cat) setName(cat.name);
+    } else {
+      const acct = plan.accounts.find((a) => a.id === id);
+      if (acct) setName(acct.name);
+    }
+  }
 
   return (
     <form
@@ -551,11 +651,22 @@ function GoalEditor({
       onSubmit={(e) => {
         e.preventDefault();
         const parsed = parseMoneyInput(amount);
-        if (!categoryId) {
+        const baselineParsed = baseline.trim()
+          ? parseMoneyInput(baseline)
+          : null;
+        if (linkType === "category" && !categoryId) {
           setError("Category is required.");
           return;
         }
-        if (parsed === null || parsed <= 0) {
+        if (linkType === "account" && !accountId) {
+          setError("Account is required.");
+          return;
+        }
+        if (parsed === null) {
+          setError("Enter a valid target amount.");
+          return;
+        }
+        if (type !== "debt_payoff" && parsed <= 0) {
           setError("Target amount must be greater than zero.");
           return;
         }
@@ -563,16 +674,28 @@ function GoalEditor({
           setError("Due date is required for date-based goals.");
           return;
         }
-        if (categoriesWithGoals.has(categoryId) && mode === "add") {
-          setError("This category already has an active goal.");
+        if (!typeOptions.some((t) => t.value === type)) {
+          setError("Choose a compatible goal type for this link.");
           return;
         }
         onSave({
-          categoryId,
+          name: name.trim() || undefined,
+          linkType,
+          categoryId: linkType === "category" ? categoryId : null,
+          accountId: linkType === "account" ? accountId : null,
           type,
           amountCents: parsed,
+          baselineAmountCents:
+            baselineParsed === null ? undefined : baselineParsed,
           dueDate: dueDate || undefined,
+          repeatRule: repeatRule.trim() || undefined,
           notes: notes.trim() || undefined,
+          includeTransfers: isContributionGoalType(type)
+            ? includeTransfers
+            : undefined,
+          includeAdjustments: isContributionGoalType(type)
+            ? includeAdjustments
+            : undefined,
         });
       }}
     >
@@ -588,47 +711,103 @@ function GoalEditor({
           Cancel
         </button>
       </div>
+
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block text-sm">
+        <label className="block text-sm sm:col-span-2">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
-            Category
+            Goal name
           </span>
-          <select
-            value={categoryId}
-            onChange={(e) => setCategoryId(e.target.value)}
+          <input
+            value={name}
+            onChange={(e) => {
+              setNameTouched(true);
+              setName(e.target.value);
+            }}
             className="input"
-            required
-          >
-            <option value="">Select category…</option>
-            {categoryOptions.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-            {existing &&
-              !categoryOptions.some((c) => c.id === existing.categoryId) && (
-                <option value={existing.categoryId}>
-                  Unknown / missing category
-                </option>
-              )}
-          </select>
+            placeholder="Auto-fills from category or account"
+          />
         </label>
+
+        <fieldset className="sm:col-span-2">
+          <legend className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
+            Link Goal To
+          </legend>
+          <div className="flex gap-2">
+            {(["category", "account"] as const).map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => {
+                  setLinkType(opt);
+                  const nextTypes = goalTypesForLink(opt);
+                  if (!nextTypes.some((t) => t.value === type)) {
+                    setType(nextTypes[0]!.value);
+                  }
+                  if (opt === "category") setAccountId("");
+                  else setCategoryId("");
+                }}
+                className={cn(
+                  "rounded-lg px-3 py-1.5 text-sm font-medium border",
+                  linkType === opt
+                    ? "bg-accent text-white border-accent"
+                    : "bg-surface border-border text-muted",
+                )}
+              >
+                {opt === "category" ? "Category" : "Account"}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        {linkType === "category" ? (
+          <div className="sm:col-span-2">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
+              Category
+            </span>
+            <GoalCategoryCombobox
+              plan={plan}
+              value={categoryId}
+              excludeCategoryIds={excludeCategoryIds}
+              onChange={(id) => {
+                setCategoryId(id);
+                applyDefaultName("category", id);
+              }}
+            />
+          </div>
+        ) : (
+          <div className="sm:col-span-2">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
+              Account
+            </span>
+            <GoalAccountCombobox
+              plan={plan}
+              value={accountId}
+              excludeAccountIds={excludeAccountIds}
+              onChange={(id) => {
+                setAccountId(id);
+                applyDefaultName("account", id);
+              }}
+            />
+          </div>
+        )}
+
         <label className="block text-sm">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
-            Type
+            Goal type
           </span>
           <select
             value={type}
             onChange={(e) => setType(e.target.value as TargetType)}
             className="input"
           >
-            {TARGET_TYPES.map((t) => (
+            {typeOptions.map((t) => (
               <option key={t.value} value={t.value}>
                 {t.label}
               </option>
             ))}
           </select>
         </label>
+
         <label className="block text-sm">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
             Target amount
@@ -642,6 +821,22 @@ function GoalEditor({
             required
           />
         </label>
+
+        {(type === "debt_payoff" || type === "maintain_minimum_balance") && (
+          <label className="block text-sm">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
+              Baseline / starting amount
+            </span>
+            <input
+              value={baseline}
+              onChange={(e) => setBaseline(e.target.value)}
+              className="input"
+              inputMode="decimal"
+              placeholder="Optional"
+            />
+          </label>
+        )}
+
         <label className="block text-sm">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
             Due date{isDateBasedGoalType(type) ? " (required)" : ""}
@@ -654,6 +849,40 @@ function GoalEditor({
             required={isDateBasedGoalType(type)}
           />
         </label>
+
+        <label className="block text-sm">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
+            Repeat cadence
+          </span>
+          <input
+            value={repeatRule}
+            onChange={(e) => setRepeatRule(e.target.value)}
+            className="input"
+            placeholder="e.g. monthly, weekly"
+          />
+        </label>
+
+        {isContributionGoalType(type) && (
+          <>
+            <label className="flex items-center gap-2 text-sm sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={includeTransfers}
+                onChange={(e) => setIncludeTransfers(e.target.checked)}
+              />
+              Include transfers into the account
+            </label>
+            <label className="flex items-center gap-2 text-sm sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={includeAdjustments}
+                onChange={(e) => setIncludeAdjustments(e.target.checked)}
+              />
+              Include adjustments
+            </label>
+          </>
+        )}
+
         <label className="block text-sm sm:col-span-2">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
             Notes
@@ -665,13 +894,21 @@ function GoalEditor({
           />
         </label>
       </div>
+
       {error && <p className="text-sm text-danger">{error}</p>}
       <div className="flex flex-wrap gap-2">
         <button
           type="submit"
           className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
         >
-          Save goal
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg border border-border px-3 py-2 text-sm"
+        >
+          Cancel
         </button>
         {onDelete && (
           <button

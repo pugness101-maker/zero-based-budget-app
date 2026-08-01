@@ -123,11 +123,14 @@ import {
   updatePayeeDefaults,
 } from "@/lib/payees/manage";
 import { validateTargetInput } from "@/lib/calculations/goals";
+import { migratePlanTargets } from "@/lib/goals/migrate";
 import {
+  archiveGoalOnly,
   deleteGoalOnly,
   reconnectGoal as reconnectGoalOp,
   repairDuplicateGoals as repairDuplicateGoalsOp,
 } from "@/lib/goals/repair";
+import type { GoalLinkType } from "@/lib/types/budget";
 import {
   applyRedo,
   applyUndo,
@@ -218,17 +221,29 @@ interface BudgetState {
   clearToast: () => void;
   showToast: (message: string) => void;
   addTarget: (input: {
-    categoryId: string;
+    name?: string;
+    linkType: GoalLinkType;
+    categoryId?: string | null;
+    accountId?: string | null;
     type: TargetType;
     amountCents: Cents;
+    baselineAmountCents?: Cents;
     dueDate?: string;
+    repeatRule?: string;
     notes?: string;
+    includeTransfers?: boolean;
+    includeAdjustments?: boolean;
+    allowDuplicateAccountGoal?: boolean;
   }) => { ok: true; id: string } | { ok: false; error: string };
   updateTarget: (
     id: string,
     patch: Partial<Target>,
   ) => { ok: boolean; error?: string };
   deleteTarget: (id: string) => { ok: boolean; error?: string };
+  archiveTarget: (
+    id: string,
+    paused?: boolean,
+  ) => { ok: boolean; error?: string };
   repairDuplicateGoals: () => {
     ok: boolean;
     removedCount?: number;
@@ -236,7 +251,9 @@ interface BudgetState {
   };
   reconnectGoal: (
     targetId: string,
-    categoryId: string,
+    input:
+      | { linkType: "category"; categoryId: string }
+      | { linkType: "account"; accountId: string },
   ) => { ok: boolean; error?: string };
   createBackup: (label: string, reason: BackupRecord["reason"], importBatchId?: string) => string;
   commitTransactionImport: (input: {
@@ -826,23 +843,39 @@ export const useBudgetStore = create<BudgetState>()(
       clearToast: () => set({ toastMessage: null }),
       showToast: (message) => set({ toastMessage: message }),
 
-      addTarget: ({ categoryId, type, amountCents, dueDate, notes }) => {
+      addTarget: (input) => {
+        const linkType = input.linkType;
+        const categoryId =
+          linkType === "category" ? input.categoryId ?? null : null;
+        const accountId =
+          linkType === "account" ? input.accountId ?? null : null;
         const invalid = validateTargetInput(get().plan, {
+          linkType,
           categoryId,
-          type,
-          amountCents,
-          dueDate,
+          accountId,
+          type: input.type,
+          amountCents: input.amountCents,
+          dueDate: input.dueDate,
+          allowDuplicateAccountGoal: input.allowDuplicateAccountGoal,
         });
         if (invalid) return { ok: false as const, error: invalid };
 
         const id = newId("tgt");
         const target: Target = {
           id,
+          name: input.name?.trim() || undefined,
+          linkType,
           categoryId,
-          type,
-          amountCents,
-          dueDate,
-          notes,
+          accountId,
+          type: input.type,
+          amountCents: input.amountCents,
+          baselineAmountCents: input.baselineAmountCents,
+          dueDate: input.dueDate,
+          repeatRule: input.repeatRule,
+          notes: input.notes,
+          includeTransfers: input.includeTransfers,
+          includeAdjustments: input.includeAdjustments,
+          allowDuplicateAccountGoal: input.allowDuplicateAccountGoal,
         };
         commitHistory(
           set,
@@ -867,14 +900,19 @@ export const useBudgetStore = create<BudgetState>()(
       updateTarget: (id, patch) => {
         const existing = get().plan.targets.find((t) => t.id === id);
         if (!existing) return { ok: false, error: "Goal not found." };
-        const next = { ...existing, ...patch };
+        const next: Target = { ...existing, ...patch };
+        if (next.linkType === "category") next.accountId = null;
+        if (next.linkType === "account") next.categoryId = null;
         const invalid = validateTargetInput(
           get().plan,
           {
+            linkType: next.linkType,
             categoryId: next.categoryId,
+            accountId: next.accountId,
             type: next.type,
             amountCents: next.amountCents,
             dueDate: next.dueDate,
+            allowDuplicateAccountGoal: next.allowDuplicateAccountGoal,
           },
           { excludeTargetId: id },
         );
@@ -930,6 +968,29 @@ export const useBudgetStore = create<BudgetState>()(
         return { ok: true };
       },
 
+      archiveTarget: (id, paused = true) => {
+        const result = archiveGoalOnly(get().plan, id, paused);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "target_edit",
+            entityType: "target",
+            entityId: id,
+            toast: paused ? "Goal archived" : "Goal restored",
+            audit: {
+              action: "target_change",
+              entityType: "target",
+              entityId: id,
+              summary: paused ? "Archived target" : "Unarchived target",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
       repairDuplicateGoals: () => {
         const result = repairDuplicateGoalsOp(get().plan);
         if (!result.ok) return { ok: false, error: result.error };
@@ -955,8 +1016,8 @@ export const useBudgetStore = create<BudgetState>()(
         return { ok: true, removedCount: result.removedIds.length };
       },
 
-      reconnectGoal: (targetId, categoryId) => {
-        const result = reconnectGoalOp(get().plan, targetId, categoryId);
+      reconnectGoal: (targetId, input) => {
+        const result = reconnectGoalOp(get().plan, targetId, input);
         if (!result.ok) return { ok: false, error: result.error };
         commitHistory(
           set,
@@ -970,7 +1031,10 @@ export const useBudgetStore = create<BudgetState>()(
               action: "target_change",
               entityType: "target",
               entityId: targetId,
-              summary: `Reconnected goal to category ${categoryId}`,
+              summary:
+                input.linkType === "category"
+                  ? `Reconnected goal to category ${input.categoryId}`
+                  : `Reconnected goal to account ${input.accountId}`,
             },
           },
           { plan: result.plan },
@@ -2485,7 +2549,9 @@ export const useBudgetStore = create<BudgetState>()(
       }),
       onRehydrateStorage: () => (state) => {
         if (state?.plan) {
-          state.plan = migratePlanCategories(migratePlanAccounts(state.plan));
+          state.plan = migratePlanTargets(
+            migratePlanCategories(migratePlanAccounts(state.plan)),
+          );
         }
         state?.setHydrated(true);
       },

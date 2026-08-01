@@ -89,7 +89,10 @@ export function addCategory(plan: BudgetPlan, input: AddCategoryInput): OpResult
   if (input.target) {
     const target: Target = {
       id: newId("tgt"),
+      name: category.name,
+      linkType: "category",
       categoryId: id,
+      accountId: null,
       type: input.target.type,
       amountCents: input.target.amountCents,
       dueDate: input.target.dueDate,
