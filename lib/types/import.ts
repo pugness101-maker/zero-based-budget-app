@@ -141,15 +141,30 @@ export interface ImportRow {
   include: boolean;
 }
 
+export type BackupReason =
+  | "pre_import"
+  | "manual"
+  | "pre_restore"
+  | "pre_bulk_delete"
+  | "pre_account_close"
+  | "pre_category_merge"
+  | "pre_destructive_migration"
+  | "automatic";
+
 export interface BackupRecord {
   id: string;
   label: string;
-  reason: "pre_import" | "manual" | "pre_restore";
+  reason: BackupReason;
   createdAt: string;
   schemaVersion: number;
   planSnapshot: BudgetPlan;
   importBatchId?: string;
+  /** Accounts + transactions + categories + … for UI */
+  recordCount?: number;
 }
+
+export const MAX_STORED_BACKUPS = 10;
+export const MAX_AUTOMATIC_BACKUPS = 5;
 
 export type AuditAction =
   | "create"

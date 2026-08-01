@@ -88,6 +88,7 @@ export function parseJsonBackup(content: string): JsonBackupPreview {
 }
 
 export function serializePlanBackup(plan: BudgetPlan): string {
+  // Keep legacy helper; prefer serializeFullBackup for Settings export.
   return JSON.stringify(
     {
       schemaVersion: IMPORT_SCHEMA_VERSION,

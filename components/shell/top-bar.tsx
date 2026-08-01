@@ -14,8 +14,10 @@ import {
 } from "lucide-react";
 import { formatMonthLabel, nextMonth, previousMonth } from "@/lib/dates";
 import { useBudgetStore } from "@/lib/store/budget-store";
+import { useSaveStatusStore } from "@/lib/persistence/save-status-store";
 import { shouldHandleUndoRedoShortcut } from "@/lib/history/keyboard";
 import { cn } from "@/lib/utils";
+import type { SaveStatus } from "@/lib/persistence/storage";
 
 export function TopBar() {
   const monthKey = useBudgetStore((s) => s.selectedMonthKey);
@@ -26,6 +28,8 @@ export function TopBar() {
   const redo = useBudgetStore((s) => s.redo);
   const undoStack = useBudgetStore((s) => s.undoStack);
   const redoStack = useBudgetStore((s) => s.redoStack);
+  const saveStatus = useSaveStatusStore((s) => s.saveStatus);
+  const retryPersist = useBudgetStore((s) => s.retryPersist);
   const canUndo = undoStack.length > 0;
   const canRedo = redoStack.length > 0;
   const undoTip = undoStack[undoStack.length - 1]?.label;
@@ -68,6 +72,7 @@ export function TopBar() {
       </div>
 
       <div className="ml-auto flex items-center gap-1">
+        <SaveStatusIndicator status={saveStatus} onRetry={retryPersist} />
         <IconButton
           label="Search"
           disabled
@@ -122,6 +127,50 @@ export function TopBar() {
         </div>
       </div>
     </header>
+  );
+}
+
+function saveStatusLabel(status: SaveStatus): string {
+  switch (status) {
+    case "saving":
+      return "Saving…";
+    case "saved":
+      return "Saved";
+    case "failed":
+      return "Save failed";
+    case "offline_pending":
+      return "Offline changes pending";
+    default:
+      return "";
+  }
+}
+
+function SaveStatusIndicator({
+  status,
+  onRetry,
+}: {
+  status: SaveStatus;
+  onRetry: () => void;
+}) {
+  if (status === "idle") return null;
+  const label = saveStatusLabel(status);
+  const isFailed = status === "failed";
+  return (
+    <button
+      type="button"
+      onClick={isFailed ? onRetry : undefined}
+      title={isFailed ? "Retry save" : label}
+      className={cn(
+        "mr-1 hidden sm:inline-flex items-center rounded-md px-2 py-1 text-[11px] font-medium",
+        status === "saving" && "text-muted",
+        status === "saved" && "text-accent",
+        status === "offline_pending" && "text-amber-700",
+        isFailed && "text-red-600 hover:bg-red-50 cursor-pointer",
+      )}
+    >
+      {label}
+      {isFailed ? " · Retry" : ""}
+    </button>
   );
 }
 

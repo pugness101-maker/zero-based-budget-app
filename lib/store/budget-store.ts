@@ -3,6 +3,19 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createDemoPlan } from "@/lib/seed/demo-plan";
+import { countBackupRecords } from "@/lib/exports/full-backup";
+import { parseFullBackup } from "@/lib/exports/full-backup";
+import {
+  applyRestoreMode,
+  mergeRestoreExtras,
+} from "@/lib/imports/restore-backup";
+import { pruneBackups } from "@/lib/persistence/prune-backups";
+import {
+  BUDGET_STORAGE_KEY,
+  trackedJsonStorage,
+  writePersistedState,
+} from "@/lib/persistence/storage";
+import { useSaveStatusStore } from "@/lib/persistence/save-status-store";
 import type {
   AccountBudgetKind,
   AccountType,
@@ -34,7 +47,6 @@ import {
   toCommitResult,
 } from "@/lib/imports/import-transactions";
 import { reverseImportBatch } from "@/lib/imports/reverse-import";
-import { parseJsonBackup } from "@/lib/imports/parse-json-backup";
 import { commitYnabZipImport as commitYnabZip } from "@/lib/imports/ynab/commit-ynab-zip";
 import type { YnabZipCommitInput } from "@/lib/imports/ynab/commit-ynab-zip";
 import { IMPORT_SCHEMA_VERSION } from "@/lib/types/import";
@@ -159,6 +171,8 @@ interface BudgetState {
   undoStack: HistoryEntry[];
   redoStack: HistoryEntry[];
   toastMessage: string | null;
+  /** Bumped to force a persist write (retry). */
+  persistRevision: number;
   setMonth: (monthKey: MonthKey) => void;
   setSelectedCategory: (categoryId: string | null) => void;
   toggleSidebar: () => void;
@@ -256,6 +270,12 @@ interface BudgetState {
       | { linkType: "account"; accountId: string },
   ) => { ok: boolean; error?: string };
   createBackup: (label: string, reason: BackupRecord["reason"], importBatchId?: string) => string;
+  deleteBackup: (backupId: string) => void;
+  restoreStoredBackup: (
+    backupId: string,
+    mode: MergeMode,
+  ) => ImportCommitResult;
+  retryPersist: () => void;
   commitTransactionImport: (input: {
     batch: ImportBatch;
     rows: ImportRow[];
@@ -493,6 +513,47 @@ export const useBudgetStore = create<BudgetState>()(
       undoStack: [],
       redoStack: [],
       toastMessage: null,
+      persistRevision: 0,
+
+      retryPersist: () => {
+        useSaveStatusStore.getState().setSaveStatus("saving");
+        set((s) => ({
+          persistRevision: s.persistRevision + 1,
+        }));
+        // Zustand persist will write via partialize; also force a direct write
+        // in case the middleware skipped an identical snapshot.
+        queueMicrotask(() => {
+          try {
+            const state = get();
+            const partial = {
+              plan: state.plan,
+              selectedMonthKey: state.selectedMonthKey,
+              sidebarCollapsed: state.sidebarCollapsed,
+              importBatches: state.importBatches,
+              importRowsByBatch: state.importRowsByBatch,
+              backups: pruneBackups(state.backups),
+              auditEvents: state.auditEvents.slice(0, 50),
+              mappingPresets: state.mappingPresets,
+              payeeAliasRules: state.payeeAliasRules,
+              categoryImportRules: state.categoryImportRules,
+              importPromptDismissed: state.importPromptDismissed,
+              undoStack: state.undoStack.slice(-15),
+              redoStack: state.redoStack.slice(-15),
+              persistRevision: state.persistRevision,
+            };
+            writePersistedState(
+              JSON.stringify({ state: partial, version: 0 }),
+            );
+          } catch (err) {
+            useSaveStatusStore
+              .getState()
+              .setSaveStatus(
+                "failed",
+                err instanceof Error ? err.message : "Failed to save locally",
+              );
+          }
+        });
+      },
 
       setMonth: (monthKey) => set({ selectedMonthKey: monthKey }),
 
@@ -720,6 +781,10 @@ export const useBudgetStore = create<BudgetState>()(
       },
 
       bulkDeleteTransactions: (ids) => {
+        get().createBackup(
+          `Before bulk delete ${ids.length} transaction(s)`,
+          "pre_bulk_delete",
+        );
         const next = applyBulkDelete(get().plan, ids);
         commitHistory(
           set,
@@ -1044,19 +1109,61 @@ export const useBudgetStore = create<BudgetState>()(
 
       createBackup: (label, reason, importBatchId) => {
         const id = newId("bak");
+        const planSnapshot = structuredClone(get().plan);
         const backup: BackupRecord = {
           id,
           label,
           reason,
           createdAt: new Date().toISOString(),
           schemaVersion: IMPORT_SCHEMA_VERSION,
-          planSnapshot: structuredClone(get().plan),
+          planSnapshot,
           importBatchId,
+          recordCount: countBackupRecords(planSnapshot),
         };
         set((s) => ({
-          backups: [backup, ...s.backups].slice(0, 20),
+          backups: pruneBackups([backup, ...s.backups]),
         }));
         return id;
+      },
+
+      deleteBackup: (backupId) => {
+        set((s) => ({
+          backups: s.backups.filter((b) => b.id !== backupId),
+        }));
+      },
+
+      restoreStoredBackup: (backupId, mode) => {
+        const backup = get().backups.find((b) => b.id === backupId);
+        if (!backup) {
+          return {
+            ok: false,
+            batch: {
+              id: newId("batch"),
+              householdId: "local",
+              userId: "demo",
+              fileName: "stored-backup.json",
+              fileType: "json",
+              importType: "full_backup",
+              status: "failed",
+              totalRows: 0,
+              importedRows: 0,
+              duplicateRows: 0,
+              skippedRows: 0,
+              errorRows: 1,
+              mappingJson: {},
+              createdAt: new Date().toISOString(),
+              mergeMode: mode,
+            },
+            rows: [],
+            error: "Backup not found.",
+          };
+        }
+        const content = JSON.stringify({
+          schemaVersion: backup.schemaVersion,
+          exportedAt: backup.createdAt,
+          plan: backup.planSnapshot,
+        });
+        return get().restoreJsonBackup(content, mode);
       },
 
       commitTransactionImport: ({
@@ -1273,7 +1380,7 @@ export const useBudgetStore = create<BudgetState>()(
       },
 
       restoreJsonBackup: (content, mode) => {
-        const preview = parseJsonBackup(content);
+        const preview = parseFullBackup(content);
         const batchId = newId("batch");
         const batch: ImportBatch = {
           id: batchId,
@@ -1293,7 +1400,7 @@ export const useBudgetStore = create<BudgetState>()(
           mergeMode: mode,
         };
 
-        if (!preview.ok || !preview.plan) {
+        if (!preview.ok || !preview.plan || !preview.payload) {
           return {
             ok: false,
             batch: { ...batch, status: "failed", errorRows: 1 },
@@ -1302,7 +1409,13 @@ export const useBudgetStore = create<BudgetState>()(
           };
         }
 
-        const previous = structuredClone(get().plan);
+        const previousPlan = structuredClone(get().plan);
+        const previousRules = {
+          payeeAliasRules: { ...get().payeeAliasRules },
+          categoryImportRules: { ...get().categoryImportRules },
+        };
+        const previousBatches = structuredClone(get().importBatches);
+        const previousAudit = structuredClone(get().auditEvents);
         const backupId = get().createBackup(
           "Before JSON restore",
           "pre_restore",
@@ -1310,85 +1423,79 @@ export const useBudgetStore = create<BudgetState>()(
         );
 
         try {
-          if (mode === "replace") {
-            set((s) => ({
-              plan: structuredClone(preview.plan!),
-              importBatches: [
-                {
-                  ...batch,
-                  status: "committed",
-                  backupId,
-                  completedAt: new Date().toISOString(),
-                  importedRows: preview.transactionCount,
-                  totalRows: preview.transactionCount,
+          const nextPlan = applyRestoreMode(
+            get().plan,
+            preview.plan,
+            mode,
+          );
+          const extras = mergeRestoreExtras(
+            {
+              payeeAliasRules: get().payeeAliasRules,
+              categoryImportRules: get().categoryImportRules,
+            },
+            preview.payload,
+            mode,
+          );
+          const committedBatch: ImportBatch = {
+            ...batch,
+            status: "committed",
+            backupId,
+            mergeMode: mode,
+            completedAt: new Date().toISOString(),
+            importedRows: preview.transactionCount,
+            totalRows: preview.transactionCount,
+          };
+
+          set((s) => ({
+            plan: nextPlan,
+            payeeAliasRules: extras.payeeAliasRules,
+            categoryImportRules: extras.categoryImportRules,
+            importBatches:
+              mode === "replace"
+                ? [
+                    committedBatch,
+                    ...(preview.payload!.importBatches ?? []).slice(0, 20),
+                  ]
+                : [committedBatch, ...s.importBatches],
+            auditEvents: [
+              auditEvent({
+                action: "restore",
+                entityType: "backup",
+                summary: `Restored JSON backup (${mode})`,
+                metadata: {
+                  mode,
+                  accounts: preview.accountCount,
+                  transactions: preview.transactionCount,
+                  categories: preview.categoryCount,
+                  goals: preview.goalCount,
                 },
-                ...s.importBatches,
-              ],
-              auditEvents: [
-                auditEvent({
-                  action: "restore",
-                  entityType: "backup",
-                  summary: "Restored JSON backup (replace)",
-                }),
-                ...s.auditEvents,
-              ],
-            }));
-          } else {
-            // Merge: append transactions/accounts/categories by id
-            const plan = structuredClone(get().plan);
-            const acctIds = new Set(plan.accounts.map((a) => a.id));
-            const catIds = new Set(plan.categories.map((c) => c.id));
-            const txnIds = new Set(plan.transactions.map((t) => t.id));
-            const incoming = preview.plan!;
-            plan.accounts = [
-              ...plan.accounts,
-              ...incoming.accounts.filter((a) => !acctIds.has(a.id)),
-            ];
-            plan.categoryGroups = [
-              ...plan.categoryGroups,
-              ...incoming.categoryGroups.filter(
-                (g) => !plan.categoryGroups.some((x) => x.id === g.id),
-              ),
-            ];
-            plan.categories = [
-              ...plan.categories,
-              ...incoming.categories.filter((c) => !catIds.has(c.id)),
-            ];
-            plan.transactions = [
-              ...incoming.transactions.filter((t) => !txnIds.has(t.id)),
-              ...plan.transactions,
-            ];
-            set((s) => ({
-              plan,
-              importBatches: [
-                {
-                  ...batch,
-                  status: "committed",
-                  backupId,
-                  mergeMode: "merge",
-                  completedAt: new Date().toISOString(),
-                  importedRows: incoming.transactions.length,
-                  totalRows: incoming.transactions.length,
-                },
-                ...s.importBatches,
-              ],
-            }));
-          }
+              }),
+              ...(mode === "replace"
+                ? (preview.payload!.auditEvents ?? []).slice(0, 50)
+                : s.auditEvents),
+            ].slice(0, 100),
+            toastMessage: `Restored backup (${mode}) · ${preview.transactionCount} transactions`,
+            undoStack: [],
+            redoStack: [],
+          }));
+
           return {
             ok: true,
-            batch: {
-              ...batch,
-              status: "committed",
-              backupId,
-              completedAt: new Date().toISOString(),
-            },
+            batch: committedBatch,
             rows: [],
           };
         } catch (err) {
-          set({ plan: previous });
+          // Full rollback on failure
+          set({
+            plan: previousPlan,
+            payeeAliasRules: previousRules.payeeAliasRules,
+            categoryImportRules: previousRules.categoryImportRules,
+            importBatches: previousBatches,
+            auditEvents: previousAudit,
+          });
           return {
             ok: false,
-            batch: { ...batch, status: "failed" },
+            batch: { ...batch, status: "failed", backupId },
             rows: [],
             error: err instanceof Error ? err.message : "Restore failed.",
           };
@@ -1548,18 +1655,32 @@ export const useBudgetStore = create<BudgetState>()(
       dismissImportPrompt: () => set({ importPromptDismissed: true }),
 
       resetDemoData: () => {
+        get().createBackup(
+          "Before reset demo data",
+          "pre_destructive_migration",
+        );
         const plan = createDemoPlan();
-        set({
+        set((s) => ({
           plan,
           selectedMonthKey: plan.workingMonthKey,
           selectedCategoryId: null,
           importBatches: [],
           importRowsByBatch: {},
           importPromptDismissed: false,
+          payeeAliasRules: {},
+          categoryImportRules: {},
           undoStack: [],
           redoStack: [],
-          toastMessage: null,
-        });
+          toastMessage: "Demo data reset",
+          auditEvents: [
+            auditEvent({
+              action: "restore",
+              entityType: "backup",
+              summary: "Reset demo data to seed plan",
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        }));
       },
 
       setHydrated: (value) => set({ hydrated: value }),
@@ -1623,6 +1744,10 @@ export const useBudgetStore = create<BudgetState>()(
       },
 
       closeAccount: (input) => {
+        get().createBackup(
+          `Before close account ${input.accountId}`,
+          "pre_account_close",
+        );
         const result = closeAccountOp(get().plan, input);
         if (!result.ok) return { ok: false, error: result.error };
         commitHistory(
@@ -1735,6 +1860,10 @@ export const useBudgetStore = create<BudgetState>()(
       },
 
       bulkCloseAccounts: (accountIds) => {
+        get().createBackup(
+          `Before bulk close ${accountIds.length} account(s)`,
+          "pre_account_close",
+        );
         const result = bulkCloseAccountsOp(get().plan, accountIds, true);
         if (!result.ok) return { ok: false, error: result.error };
         commitHistory(
@@ -2114,6 +2243,10 @@ export const useBudgetStore = create<BudgetState>()(
       },
 
       mergeCategories: (sourceId, destinationId) => {
+        get().createBackup(
+          `Before merge category ${sourceId}`,
+          "pre_category_merge",
+        );
         const result = mergeCategoriesOp(get().plan, sourceId, destinationId);
         if (!result.ok) return { ok: false, error: result.error };
         const categoryImportRules = remapCategoryImportRules(
@@ -2286,6 +2419,10 @@ export const useBudgetStore = create<BudgetState>()(
       },
 
       mergeCategoryGroups: (sourceGroupId, destinationGroupId) => {
+        get().createBackup(
+          `Before merge group ${sourceGroupId}`,
+          "pre_category_merge",
+        );
         const result = mergeCategoryGroupsOp(
           get().plan,
           sourceGroupId,
@@ -2467,6 +2604,10 @@ export const useBudgetStore = create<BudgetState>()(
       },
 
       bulkMergeCategories: (sourceIds, destinationId, available) => {
+        get().createBackup(
+          `Before bulk merge ${sourceIds.length} categories`,
+          "pre_category_merge",
+        );
         const result = bulkMergeCategoriesOp(
           get().plan,
           sourceIds,
@@ -2499,6 +2640,10 @@ export const useBudgetStore = create<BudgetState>()(
       },
 
       bulkDeleteCategories: (categoryIds, mode, options) => {
+        get().createBackup(
+          `Before bulk delete ${categoryIds.length} categor${categoryIds.length === 1 ? "y" : "ies"}`,
+          "pre_bulk_delete",
+        );
         const result = bulkDeleteCategoriesOp(
           get().plan,
           categoryIds,
@@ -2530,14 +2675,15 @@ export const useBudgetStore = create<BudgetState>()(
       },
     }),
     {
-      name: "edf-budget-demo",
+      name: BUDGET_STORAGE_KEY,
+      storage: trackedJsonStorage,
       partialize: (state) => ({
         plan: state.plan,
         selectedMonthKey: state.selectedMonthKey,
         sidebarCollapsed: state.sidebarCollapsed,
         importBatches: state.importBatches,
         importRowsByBatch: state.importRowsByBatch,
-        backups: state.backups.slice(0, 10),
+        backups: pruneBackups(state.backups),
         auditEvents: state.auditEvents.slice(0, 50),
         mappingPresets: state.mappingPresets,
         payeeAliasRules: state.payeeAliasRules,
@@ -2546,14 +2692,45 @@ export const useBudgetStore = create<BudgetState>()(
         // Persist undo/redo so history survives navigation/refresh
         undoStack: state.undoStack.slice(-15),
         redoStack: state.redoStack.slice(-15),
+        persistRevision: state.persistRevision,
       }),
-      onRehydrateStorage: () => (state) => {
+      onRehydrateStorage: () => (state, error) => {
+        if (error) {
+          useSaveStatusStore.getState().setSaveStatus("failed", String(error));
+        }
         if (state?.plan) {
-          state.plan = migratePlanTargets(
+          const before = JSON.stringify(state.plan);
+          const migrated = migratePlanTargets(
             migratePlanCategories(migratePlanAccounts(state.plan)),
           );
+          state.plan = migrated;
+          // Auto-backup when a destructive/shape-changing migration runs
+          if (before !== JSON.stringify(migrated)) {
+            const prior = JSON.parse(before) as BudgetPlan;
+            state.backups = pruneBackups([
+              {
+                id: `bak-mig-${Date.now()}`,
+                label: "Before schema migration",
+                reason: "pre_destructive_migration",
+                createdAt: new Date().toISOString(),
+                schemaVersion: IMPORT_SCHEMA_VERSION,
+                planSnapshot: prior,
+                recordCount: countBackupRecords(prior),
+              },
+              ...(state.backups ?? []),
+            ]);
+          }
         }
         state?.setHydrated(true);
+        if (!error) {
+          useSaveStatusStore
+            .getState()
+            .setSaveStatus(
+              typeof navigator !== "undefined" && !navigator.onLine
+                ? "offline_pending"
+                : "saved",
+            );
+        }
       },
     },
   ),

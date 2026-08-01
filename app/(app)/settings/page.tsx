@@ -7,7 +7,6 @@ import {
   BarChart3,
   ArrowLeftRight,
   LayoutGrid,
-  Upload,
 } from "lucide-react";
 import { brand } from "@/lib/brand";
 import { useBudgetStore } from "@/lib/store/budget-store";
@@ -15,8 +14,7 @@ import { ImportWizard } from "@/components/imports/import-wizard";
 import { AccountsSettings } from "@/components/settings/accounts-settings";
 import { CategoriesSettings } from "@/components/settings/categories-settings";
 import { PayeesSettings } from "@/components/settings/payees-settings";
-import { serializePlanBackup } from "@/lib/imports/parse-json-backup";
-import { formatDisplayDate } from "@/lib/dates";
+import { ExportPanel } from "@/components/settings/export-panel";
 
 const moreLinks = [
   { href: "/goals", label: "Goals", icon: Target, detail: "Targets and funding progress" },
@@ -30,31 +28,16 @@ export default function SettingsPage() {
   const hideBalances = plan.preferences.hideBalances;
   const toggleHideBalances = useBudgetStore((s) => s.toggleHideBalances);
   const resetDemoData = useBudgetStore((s) => s.resetDemoData);
-  const importBatches = useBudgetStore((s) => s.importBatches);
-  const backups = useBudgetStore((s) => s.backups);
-  const reverseImport = useBudgetStore((s) => s.reverseImport);
-  const createBackup = useBudgetStore((s) => s.createBackup);
   const [wizardOpen, setWizardOpen] = useState(false);
-
-  function downloadBackup() {
-    createBackup("Manual export", "manual");
-    const blob = new Blob([serializePlanBackup(plan)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `everydollarflow-backup-${plan.workingMonthKey}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
+  const [resetConfirm, setResetConfirm] = useState("");
 
   return (
     <div className="px-4 py-4 md:px-6 max-w-2xl space-y-6 overflow-x-hidden">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 text-sm text-muted">
-          Local demo preferences for {brand.name}.
+          Local demo preferences for {brand.name}. Data persists in this
+          browser via local storage.
         </p>
       </div>
 
@@ -85,72 +68,7 @@ export default function SettingsPage() {
         </ul>
       </section>
 
-      <section className="rounded-xl border border-border bg-surface p-4 space-y-4">
-        <div className="flex items-center gap-2">
-          <Upload className="h-4 w-4 text-accent" />
-          <h2 className="text-sm font-semibold">Import / Export</h2>
-        </div>
-        <p className="text-sm text-muted">
-          Import CSV statements, YNAB-style exports, balance/budget files, or a
-          JSON backup. Every import creates a restore point and can be undone.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setWizardOpen(true)}
-            className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
-          >
-            Import past data
-          </button>
-          <button
-            type="button"
-            onClick={downloadBackup}
-            className="rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-black/5"
-          >
-            Export JSON backup
-          </button>
-        </div>
-
-        {importBatches.length > 0 && (
-          <div className="pt-2 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted">
-              Recent imports
-            </p>
-            <ul className="divide-y divide-border rounded-lg border border-border">
-              {importBatches.slice(0, 5).map((b) => (
-                <li
-                  key={b.id}
-                  className="flex items-center justify-between gap-2 px-3 py-2 text-sm"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{b.fileName}</p>
-                    <p className="text-xs text-muted">
-                      {b.status} · {b.importedRows} imported
-                    </p>
-                  </div>
-                  {b.status === "committed" && (
-                    <button
-                      type="button"
-                      onClick={() => reverseImport(b.id)}
-                      className="text-xs text-accent hover:underline"
-                    >
-                      Undo
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {backups.length > 0 && (
-          <p className="text-xs text-muted">
-            {backups.length} local backup
-            {backups.length === 1 ? "" : "s"} stored · latest{" "}
-            {formatDisplayDate(backups[0]!.createdAt.slice(0, 10))}
-          </p>
-        )}
-      </section>
+      <ExportPanel onOpenImport={() => setWizardOpen(true)} />
 
       <AccountsSettings />
 
@@ -174,22 +92,34 @@ export default function SettingsPage() {
       <section className="rounded-xl border border-border bg-surface p-4 space-y-3">
         <h2 className="text-sm font-semibold">Demo data</h2>
         <p className="text-sm text-muted">
-          Plan: {plan.name}. Data persists in this browser via local storage.
+          Plan: {plan.name}. Imported and edited data stays until you reset.
+          Refreshing or reopening the browser does not restore seed data.
         </p>
+        <label className="block text-xs text-muted space-y-1">
+          Type RESET to enable
+          <input
+            value={resetConfirm}
+            onChange={(e) => setResetConfirm(e.target.value)}
+            placeholder="RESET"
+            className="mt-1 w-full rounded-md border border-border px-2 py-1.5 text-sm"
+          />
+        </label>
         <button
           type="button"
+          disabled={resetConfirm !== "RESET"}
           onClick={() => {
             if (
               confirm(
-                "Reset all local changes and restore the college-student demo plan?",
+                "This permanently replaces your local plan with the college-student demo. A backup is created first. Continue?",
               )
             ) {
               resetDemoData();
+              setResetConfirm("");
             }
           }}
-          className="rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-black/5"
+          className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          Reset demo data
+          Reset Demo Data
         </button>
       </section>
 
