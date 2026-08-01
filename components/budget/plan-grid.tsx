@@ -15,6 +15,8 @@ import { parseMoneyInput } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { CategoryInspector } from "@/components/budget/category-inspector";
 import { PlanSummary } from "@/components/budget/plan-summary";
+import { ImportPrompt } from "@/components/imports/import-prompt";
+import { ImportWizard } from "@/components/imports/import-wizard";
 
 export function PlanGrid() {
   const plan = useBudgetStore((s) => s.plan);
@@ -22,11 +24,13 @@ export function PlanGrid() {
   const toggleGroupCollapsed = useBudgetStore((s) => s.toggleGroupCollapsed);
   const setSelectedCategory = useBudgetStore((s) => s.setSelectedCategory);
   const setAssigned = useBudgetStore((s) => s.setAssigned);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const summary = buildPlanMonthSummary(plan, monthKey);
 
   return (
     <div>
+      <ImportPrompt onImport={() => setWizardOpen(true)} />
       <PlanSummary summary={summary} />
 
       {/* Desktop table */}
@@ -134,6 +138,7 @@ export function PlanGrid() {
       </div>
 
       <CategoryInspector />
+      <ImportWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
     </div>
   );
 }

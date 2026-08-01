@@ -1,0 +1,10 @@
+Account,Flag,Date,Payee,Category Group/Category,Category Group,Category,Memo,Outflow,Inflow,Cleared
+Checking,,05/01/2025,Campus Bookstore Job,,,Ready to Assign,,,"$1,450.00",Cleared
+Checking,,05/03/2025,Local Church,Giving: Tithe,Giving,Tithe,,$120.00,,Cleared
+Checking,Orange,05/10/2025,Aldi,Food: Groceries,Food,Groceries,Weekly,$68.42,,Uncleared
+Credit Card,,05/12/2025,Amazon,College: Books,College,Books,Textbook,$54.99,,Cleared
+Checking,,05/15/2025,Transfer : HYSA,,,,"Move to savings",$150.00,,Cleared
+HYSA,,05/15/2025,Transfer : Checking,,,,,$150.00,Cleared
+Checking,,08/15/2026,Future Rent,Bills: Rent,Bills,Rent,Next month,$900.00,,Uncleared
+Credit Card,,05/20/2025,Payment: Checking,Credit Card Payments: Credit Card,Credit Card Payments,Credit Card,,,$100.00,Reconciled
+Checking,,05/20/2025,Payment: Credit Card,Credit Card Payments: Credit Card,Credit Card Payments,Credit Card,,$100.00,,Cleared

@@ -262,22 +262,24 @@ export function buildPlanMonthSummary(
       .sort((a, b) => a.sortOrder - b.sortOrder);
 
     const categoryMetrics: CategoryMonthMetrics[] = cats.map((category) => {
-      const assignedCents = getAssignedForCategory(
-        plan.monthlyBudgets,
-        category.id,
-        monthKey,
+      const budgetRow = plan.monthlyBudgets.find(
+        (b) => b.categoryId === category.id && b.monthKey === monthKey,
       );
-      const activityCents = getCategoryActivity(
-        plan.transactions,
-        category.id,
-        monthKey,
-      );
-      const availableCents = getCategoryAvailable(
-        plan,
-        category,
-        monthKey,
-        cache,
-      );
+      const assignedCents = budgetRow?.assignedCents ?? 0;
+
+      // Historical YNAB imports preserve Activity/Available; current/future months use the engine.
+      const useYnabHistorical =
+        budgetRow?.source === "ynab_import" &&
+        monthKey < plan.workingMonthKey &&
+        (budgetRow.activityCents != null || budgetRow.availableCents != null);
+
+      const activityCents = useYnabHistorical
+        ? (budgetRow!.activityCents ?? 0)
+        : getCategoryActivity(plan.transactions, category.id, monthKey);
+      const availableCents = useYnabHistorical
+        ? (budgetRow!.availableCents ??
+          assignedCents + (budgetRow!.activityCents ?? 0))
+        : getCategoryAvailable(plan, category, monthKey, cache);
       const target = getTargetForCategory(plan.targets, category.id);
       const targetAmountCents = target?.amountCents ?? null;
       const underfundedCents =

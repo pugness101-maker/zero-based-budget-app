@@ -6,6 +6,8 @@ import { useBudgetStore } from "@/lib/store/budget-store";
 import { MoneyText } from "@/components/shared/money-text";
 import { formatDisplayDate, toISODate } from "@/lib/dates";
 import { parseMoneyInput } from "@/lib/money";
+import { ImportWizard } from "@/components/imports/import-wizard";
+import { ImportPrompt } from "@/components/imports/import-prompt";
 
 export function TransactionsView() {
   const searchParams = useSearchParams();
@@ -21,10 +23,15 @@ export function TransactionsView() {
     () => searchParams.get("new") === "1",
   );
   const [mode, setMode] = useState<"transaction" | "transfer">("transaction");
+  const [wizardOpen, setWizardOpen] = useState(
+    () => searchParams.get("import") === "1",
+  );
+  const batchFilter = searchParams.get("batch");
 
   const rows = useMemo(() => {
     return [...plan.transactions]
       .filter((t) => {
+        if (batchFilter && t.importBatchId !== batchFilter) return false;
         if (accountFilter && t.accountId !== accountFilter) return false;
         if (categoryFilter && t.categoryId !== categoryFilter) return false;
         if (query) {
@@ -35,13 +42,19 @@ export function TransactionsView() {
         return true;
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
-  }, [plan.transactions, accountFilter, categoryFilter, query]);
-
-  // Hide transfer pair duplicates in "all" view — show both sides but that's OK for clarity
-  // Actually show all; transfers appear once per account side.
+  }, [
+    plan.transactions,
+    accountFilter,
+    categoryFilter,
+    query,
+    batchFilter,
+  ]);
 
   return (
-    <div className="px-4 py-4 md:px-6 space-y-4">
+    <div className="space-y-4">
+      <ImportPrompt onImport={() => setWizardOpen(true)} />
+
+      <div className="px-4 md:px-6 space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
@@ -49,15 +62,25 @@ export function TransactionsView() {
           </h1>
           <p className="mt-1 text-sm text-muted">
             {rows.length} matching · transfers excluded from spending reports
+            {batchFilter ? " · filtered to import batch" : ""}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowForm((v) => !v)}
-          className="inline-flex items-center rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
-        >
-          {showForm ? "Close form" : "Add"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setWizardOpen(true)}
+            className="inline-flex items-center rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-black/5"
+          >
+            Import Data
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowForm((v) => !v)}
+            className="inline-flex items-center rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
+          >
+            {showForm ? "Close form" : "Add"}
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-2 sm:grid-cols-3">
@@ -196,6 +219,9 @@ export function TransactionsView() {
           );
         })}
       </ul>
+      </div>
+
+      <ImportWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
     </div>
   );
 }

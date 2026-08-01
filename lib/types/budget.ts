@@ -54,10 +54,31 @@ export interface Category {
   rollover: boolean;
 }
 
+export type BudgetValueSource = "app" | "ynab_import";
+
 export interface MonthlyCategoryBudget {
   categoryId: string;
   monthKey: MonthKey;
   assignedCents: Cents;
+  /** Historical YNAB activity for the month (not recalculated on import). */
+  activityCents?: Cents;
+  /** Historical YNAB available for the month (not recalculated on import). */
+  availableCents?: Cents;
+  source?: BudgetValueSource;
+}
+
+export interface ScheduledTransaction {
+  id: string;
+  accountId: string;
+  date: string;
+  payeeName: string;
+  categoryId: string | null;
+  memo?: string;
+  amountCents: Cents;
+  flag?: string;
+  importBatchId?: string;
+  importId?: string;
+  status: "pending" | "approved" | "skipped";
 }
 
 export type TargetType =
@@ -110,6 +131,9 @@ export interface Transaction {
   isTransfer: boolean;
   splits?: TransactionSplit[];
   flag?: string;
+  /** External or generated id used for duplicate detection on re-import */
+  importId?: string;
+  importBatchId?: string;
 }
 
 export interface UserPreferences {
@@ -130,6 +154,7 @@ export interface BudgetPlan {
   targets: Target[];
   payees: Payee[];
   transactions: Transaction[];
+  scheduledTransactions?: ScheduledTransaction[];
   preferences: UserPreferences;
   /** Demo household month used as "current" for seed */
   workingMonthKey: MonthKey;
