@@ -122,6 +122,12 @@ import {
   renamePayee as renamePayeeOp,
   updatePayeeDefaults,
 } from "@/lib/payees/manage";
+import { validateTargetInput } from "@/lib/calculations/goals";
+import {
+  deleteGoalOnly,
+  reconnectGoal as reconnectGoalOp,
+  repairDuplicateGoals as repairDuplicateGoalsOp,
+} from "@/lib/goals/repair";
 import {
   applyRedo,
   applyUndo,
@@ -217,9 +223,21 @@ interface BudgetState {
     amountCents: Cents;
     dueDate?: string;
     notes?: string;
-  }) => string;
-  updateTarget: (id: string, patch: Partial<Target>) => void;
-  deleteTarget: (id: string) => void;
+  }) => { ok: true; id: string } | { ok: false; error: string };
+  updateTarget: (
+    id: string,
+    patch: Partial<Target>,
+  ) => { ok: boolean; error?: string };
+  deleteTarget: (id: string) => { ok: boolean; error?: string };
+  repairDuplicateGoals: () => {
+    ok: boolean;
+    removedCount?: number;
+    error?: string;
+  };
+  reconnectGoal: (
+    targetId: string,
+    categoryId: string,
+  ) => { ok: boolean; error?: string };
   createBackup: (label: string, reason: BackupRecord["reason"], importBatchId?: string) => string;
   commitTransactionImport: (input: {
     batch: ImportBatch;
@@ -809,6 +827,14 @@ export const useBudgetStore = create<BudgetState>()(
       showToast: (message) => set({ toastMessage: message }),
 
       addTarget: ({ categoryId, type, amountCents, dueDate, notes }) => {
+        const invalid = validateTargetInput(get().plan, {
+          categoryId,
+          type,
+          amountCents,
+          dueDate,
+        });
+        if (invalid) return { ok: false as const, error: invalid };
+
         const id = newId("tgt");
         const target: Target = {
           id,
@@ -825,6 +851,7 @@ export const useBudgetStore = create<BudgetState>()(
             actionType: "target_add",
             entityType: "target",
             entityId: id,
+            toast: "Goal added",
             audit: {
               action: "target_change",
               entityType: "target",
@@ -834,10 +861,25 @@ export const useBudgetStore = create<BudgetState>()(
           },
           { plan: { ...get().plan, targets: [...get().plan.targets, target] } },
         );
-        return id;
+        return { ok: true as const, id };
       },
 
       updateTarget: (id, patch) => {
+        const existing = get().plan.targets.find((t) => t.id === id);
+        if (!existing) return { ok: false, error: "Goal not found." };
+        const next = { ...existing, ...patch };
+        const invalid = validateTargetInput(
+          get().plan,
+          {
+            categoryId: next.categoryId,
+            type: next.type,
+            amountCents: next.amountCents,
+            dueDate: next.dueDate,
+          },
+          { excludeTargetId: id },
+        );
+        if (invalid) return { ok: false, error: invalid };
+
         commitHistory(
           set,
           get,
@@ -845,6 +887,7 @@ export const useBudgetStore = create<BudgetState>()(
             actionType: "target_edit",
             entityType: "target",
             entityId: id,
+            toast: "Goal updated",
             audit: {
               action: "target_change",
               entityType: "target",
@@ -856,14 +899,17 @@ export const useBudgetStore = create<BudgetState>()(
             plan: {
               ...get().plan,
               targets: get().plan.targets.map((t) =>
-                t.id === id ? { ...t, ...patch } : t,
+                t.id === id ? next : t,
               ),
             },
           },
         );
+        return { ok: true };
       },
 
       deleteTarget: (id) => {
+        const result = deleteGoalOnly(get().plan, id);
+        if (!result.ok) return { ok: false, error: result.error };
         commitHistory(
           set,
           get,
@@ -871,6 +917,7 @@ export const useBudgetStore = create<BudgetState>()(
             actionType: "target_delete",
             entityType: "target",
             entityId: id,
+            toast: "Goal deleted",
             audit: {
               action: "target_change",
               entityType: "target",
@@ -878,13 +925,57 @@ export const useBudgetStore = create<BudgetState>()(
               summary: "Deleted target",
             },
           },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      repairDuplicateGoals: () => {
+        const result = repairDuplicateGoalsOp(get().plan);
+        if (!result.ok) return { ok: false, error: result.error };
+        if (result.removedIds.length === 0) {
+          return { ok: true, removedCount: 0 };
+        }
+        commitHistory(
+          set,
+          get,
           {
-            plan: {
-              ...get().plan,
-              targets: get().plan.targets.filter((t) => t.id !== id),
+            actionType: "target_delete",
+            entityType: "target",
+            toast: `Removed ${result.removedIds.length} duplicate goal(s)`,
+            audit: {
+              action: "target_change",
+              entityType: "target",
+              summary: `Repaired duplicate goals (${result.removedIds.length} removed)`,
+              metadata: { removedIds: result.removedIds },
             },
           },
+          { plan: result.plan },
         );
+        return { ok: true, removedCount: result.removedIds.length };
+      },
+
+      reconnectGoal: (targetId, categoryId) => {
+        const result = reconnectGoalOp(get().plan, targetId, categoryId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "target_edit",
+            entityType: "target",
+            entityId: targetId,
+            toast: "Goal reconnected",
+            audit: {
+              action: "target_change",
+              entityType: "target",
+              entityId: targetId,
+              summary: `Reconnected goal to category ${categoryId}`,
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
       },
 
       createBackup: (label, reason, importBatchId) => {

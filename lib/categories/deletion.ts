@@ -398,8 +398,12 @@ export function forceDeleteToUncategorized(
   }
 
   let next = ensureUncategorized(plan);
+  // Drop goals before reassignment — never auto-create Uncategorized goals
+  next = {
+    ...next,
+    targets: next.targets.filter((t) => t.categoryId !== categoryId),
+  };
   next = reassignCategoryId(next, categoryId, UNCATEGORIZED_ID);
-  // Drop source monthly budgets and targets after reassignment merged what it could
   next = {
     ...next,
     monthlyBudgets: next.monthlyBudgets.filter(

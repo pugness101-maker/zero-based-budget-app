@@ -1,14 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Pencil } from "lucide-react";
+import { Plus, Pencil, Trash2, Wrench } from "lucide-react";
 import { useBudgetStore } from "@/lib/store/budget-store";
 import {
   buildGoalsSummary,
   filterGoals,
+  isDateBasedGoalType,
   type GoalFilter,
   type GoalProgress,
 } from "@/lib/calculations/goals";
+import { detectGoalIssues } from "@/lib/goals/repair";
 import { MoneyText } from "@/components/shared/money-text";
 import { formatDisplayDate } from "@/lib/dates";
 import { parseMoneyInput } from "@/lib/money";
@@ -20,14 +22,18 @@ const FILTERS: { id: GoalFilter; label: string }[] = [
   { id: "on_track", label: "On Track" },
   { id: "underfunded", label: "Underfunded" },
   { id: "due_soon", label: "Due Soon" },
+  { id: "overdue", label: "Overdue" },
   { id: "completed", label: "Completed" },
+  { id: "needs_review", label: "Needs Review" },
 ];
 
 const STATUS_LABEL: Record<GoalProgress["status"], string> = {
   on_track: "On Track",
   underfunded: "Underfunded",
   due_soon: "Due Soon",
+  overdue: "Overdue",
   completed: "Completed",
+  needs_review: "Needs Review",
 };
 
 const TARGET_TYPES: { value: TargetType; label: string }[] = [
@@ -45,17 +51,44 @@ export function GoalsView() {
   const monthKey = useBudgetStore((s) => s.selectedMonthKey);
   const addTarget = useBudgetStore((s) => s.addTarget);
   const updateTarget = useBudgetStore((s) => s.updateTarget);
+  const deleteTarget = useBudgetStore((s) => s.deleteTarget);
+  const repairDuplicateGoals = useBudgetStore((s) => s.repairDuplicateGoals);
+  const reconnectGoal = useBudgetStore((s) => s.reconnectGoal);
 
   const [filter, setFilter] = useState<GoalFilter>("all");
   const [editor, setEditor] = useState<
     null | { mode: "add" } | { mode: "edit"; targetId: string }
   >(null);
+  const [reconnectFor, setReconnectFor] = useState<string | null>(null);
+  const [reconnectCategoryId, setReconnectCategoryId] = useState("");
+  const [repairMessage, setRepairMessage] = useState<string | null>(null);
 
   const summary = useMemo(
     () => buildGoalsSummary(plan, monthKey),
     [plan, monthKey],
   );
+  const issues = useMemo(() => detectGoalIssues(plan), [plan]);
   const visible = filterGoals(summary.goals, filter);
+  const summaryGoalCount =
+    summary.onTrackCount +
+    summary.completedCount +
+    summary.underfundedCount +
+    summary.dueSoonCount +
+    summary.overdueCount;
+
+  function confirmDelete(targetId: string) {
+    if (
+      !confirm(
+        "Delete this goal? The category, transactions, and budget history will not be deleted.",
+      )
+    ) {
+      return;
+    }
+    deleteTarget(targetId);
+    if (editor?.mode === "edit" && editor.targetId === targetId) {
+      setEditor(null);
+    }
+  }
 
   return (
     <div className="px-4 py-4 md:px-6 space-y-5 max-w-6xl overflow-x-hidden">
@@ -63,8 +96,8 @@ export function GoalsView() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Goals</h1>
           <p className="mt-1 text-sm text-muted">
-            Targets for the selected budget month, calculated from assigned
-            amounts and category available.
+            Targets for the selected budget month. Monthly goals use assigned
+            amounts; savings and date-based goals use category available.
           </p>
         </div>
         <button
@@ -76,6 +109,44 @@ export function GoalsView() {
           Add Goal
         </button>
       </div>
+
+      {issues.length > 0 && (
+        <div className="rounded-xl border border-warning/40 bg-warning/5 px-4 py-3 space-y-2">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold text-warning">
+                {issues.length} goal{issues.length === 1 ? "" : "s"} need review
+              </p>
+              <p className="text-xs text-muted mt-0.5">
+                Duplicate or orphaned goals are not auto-assigned to
+                Uncategorized. Keep one per category, reconnect, or delete.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const result = repairDuplicateGoals();
+                if (!result.ok) {
+                  setRepairMessage(result.error ?? "Repair failed");
+                  return;
+                }
+                setRepairMessage(
+                  result.removedCount
+                    ? `Removed ${result.removedCount} duplicate goal(s). Orphans still need reconnect or delete.`
+                    : "No duplicate goals to remove. Reconnect or delete orphans manually.",
+                );
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium hover:bg-black/5"
+            >
+              <Wrench className="h-3.5 w-3.5" />
+              Remove duplicates
+            </button>
+          </div>
+          {repairMessage && (
+            <p className="text-xs text-muted">{repairMessage}</p>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <SummaryCard label="Monthly target" cents={summary.totalTargetCents} />
@@ -89,7 +160,7 @@ export function GoalsView() {
             {summary.onTrackCount + summary.completedCount}
             <span className="text-sm font-normal text-muted">
               {" "}
-              / {summary.goals.length}
+              / {summaryGoalCount}
             </span>
           </p>
         </div>
@@ -118,7 +189,11 @@ export function GoalsView() {
                     ? summary.underfundedCount
                     : f.id === "due_soon"
                       ? summary.dueSoonCount
-                      : summary.completedCount}
+                      : f.id === "overdue"
+                        ? summary.overdueCount
+                        : f.id === "needs_review"
+                          ? summary.needsReviewCount
+                          : summary.completedCount}
                 )
               </span>
             )}
@@ -131,11 +206,24 @@ export function GoalsView() {
           mode={editor.mode}
           targetId={editor.mode === "edit" ? editor.targetId : undefined}
           onClose={() => setEditor(null)}
+          onDelete={
+            editor.mode === "edit"
+              ? () => confirmDelete(editor.targetId)
+              : undefined
+          }
           onSave={(data) => {
             if (editor.mode === "add") {
-              addTarget(data);
+              const result = addTarget(data);
+              if (!result.ok) {
+                alert(result.error);
+                return;
+              }
             } else {
-              updateTarget(editor.targetId, data);
+              const result = updateTarget(editor.targetId, data);
+              if (!result.ok) {
+                alert(result.error ?? "Could not update goal.");
+                return;
+              }
             }
             setEditor(null);
           }}
@@ -144,7 +232,7 @@ export function GoalsView() {
 
       {visible.length === 0 ? (
         <EmptyGoals
-          hasAny={summary.goals.length > 0}
+          hasAny={summary.goals.some((g) => !g.paused)}
           onAdd={() => setEditor({ mode: "add" })}
         />
       ) : (
@@ -170,6 +258,29 @@ export function GoalsView() {
                 <Metric label="Remaining" cents={goal.remainingCents} />
               </div>
 
+              {goal.overfundedCents > 0 && (
+                <p className="text-xs text-success">
+                  Overfunded by{" "}
+                  <MoneyText cents={goal.overfundedCents} />
+                </p>
+              )}
+              {goal.overspendingCents > 0 && (
+                <p className="text-xs text-danger">
+                  Overspending{" "}
+                  <MoneyText cents={goal.overspendingCents} />
+                </p>
+              )}
+              {goal.isDuplicate && (
+                <p className="text-xs text-warning">
+                  Duplicate goal for this category.
+                </p>
+              )}
+              {goal.isBrokenLink && (
+                <p className="text-xs text-warning">
+                  Broken category link — reconnect or delete.
+                </p>
+              )}
+
               <div>
                 <div className="mb-1 flex justify-between text-xs text-muted">
                   <span>{goal.percent}%</span>
@@ -189,30 +300,116 @@ export function GoalsView() {
                       "h-full rounded-full transition-all",
                       goal.status === "completed"
                         ? "bg-success"
-                        : goal.status === "underfunded" ||
-                            goal.status === "due_soon"
-                          ? "bg-warning"
-                          : "bg-accent",
+                        : goal.status === "needs_review"
+                          ? "bg-muted"
+                          : goal.status === "underfunded" ||
+                              goal.status === "due_soon" ||
+                              goal.status === "overdue"
+                            ? "bg-warning"
+                            : "bg-accent",
                     )}
                     style={{ width: `${goal.percent}%` }}
                   />
                 </div>
               </div>
 
-              <div className="flex items-center justify-between pt-1">
+              {reconnectFor === goal.targetId && (
+                <div className="flex flex-col gap-2 rounded-lg border border-border p-2">
+                  <select
+                    className="input"
+                    value={reconnectCategoryId}
+                    onChange={(e) => setReconnectCategoryId(e.target.value)}
+                  >
+                    <option value="">Choose category…</option>
+                    {plan.categories
+                      .filter(
+                        (c) =>
+                          !c.hidden &&
+                          !c.deletedAt &&
+                          !c.isArchived &&
+                          !plan.targets.some(
+                            (t) =>
+                              !t.paused &&
+                              t.categoryId === c.id &&
+                              t.id !== goal.targetId,
+                          ),
+                      )
+                      .map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                  </select>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="rounded-lg bg-accent px-2 py-1 text-xs font-medium text-white"
+                      onClick={() => {
+                        if (!reconnectCategoryId) return;
+                        const result = reconnectGoal(
+                          goal.targetId,
+                          reconnectCategoryId,
+                        );
+                        if (!result.ok) {
+                          alert(result.error);
+                          return;
+                        }
+                        setReconnectFor(null);
+                        setReconnectCategoryId("");
+                      }}
+                    >
+                      Reconnect
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-border px-2 py-1 text-xs"
+                      onClick={() => {
+                        setReconnectFor(null);
+                        setReconnectCategoryId("");
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-2 pt-1">
                 <p className="text-xs text-muted capitalize">
                   {goal.type.replaceAll("_", " ")}
                 </p>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setEditor({ mode: "edit", targetId: goal.targetId })
-                  }
-                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-accent hover:bg-accent-muted"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                  Edit Goal
-                </button>
+                <div className="flex flex-wrap items-center justify-end gap-1">
+                  {(goal.isBrokenLink || goal.isDuplicate) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReconnectFor(goal.targetId);
+                        setReconnectCategoryId("");
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted hover:bg-black/5"
+                    >
+                      Reconnect
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditor({ mode: "edit", targetId: goal.targetId })
+                    }
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-accent hover:bg-accent-muted"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => confirmDelete(goal.targetId)}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-danger hover:bg-danger/10"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </button>
+                </div>
               </div>
             </li>
           ))}
@@ -257,6 +454,8 @@ function StatusBadge({ status }: { status: GoalProgress["status"] }) {
         status === "on_track" && "bg-accent-muted text-accent",
         status === "underfunded" && "bg-warning/10 text-warning",
         status === "due_soon" && "bg-danger/10 text-danger",
+        status === "overdue" && "bg-danger/15 text-danger",
+        status === "needs_review" && "bg-black/10 text-muted",
       )}
     >
       {STATUS_LABEL[status]}
@@ -298,10 +497,12 @@ function GoalEditor({
   targetId,
   onClose,
   onSave,
+  onDelete,
 }: {
   mode: "add" | "edit";
   targetId?: string;
   onClose: () => void;
+  onDelete?: () => void;
   onSave: (data: {
     categoryId: string;
     type: TargetType;
@@ -315,15 +516,24 @@ function GoalEditor({
     ? plan.targets.find((t) => t.id === targetId)
     : undefined;
 
-  const categoriesWithGoals = new Set(plan.targets.map((t) => t.categoryId));
+  const categoriesWithGoals = new Set(
+    plan.targets
+      .filter((t) => !t.paused && t.id !== existing?.id)
+      .map((t) => t.categoryId),
+  );
   const categoryOptions = plan.categories.filter(
     (c) =>
       !c.hidden &&
-      (mode === "edit" || !categoriesWithGoals.has(c.id) || c.id === existing?.categoryId),
+      !c.deletedAt &&
+      !c.isArchived &&
+      (mode === "edit" || !categoriesWithGoals.has(c.id)),
   );
 
   const [categoryId, setCategoryId] = useState(
-    existing?.categoryId ?? categoryOptions[0]?.id ?? "",
+    existing?.categoryId &&
+      categoryOptions.some((c) => c.id === existing.categoryId)
+      ? existing.categoryId
+      : (categoryOptions[0]?.id ?? ""),
   );
   const [type, setType] = useState<TargetType>(
     existing?.type ?? "monthly_fixed",
@@ -342,11 +552,19 @@ function GoalEditor({
         e.preventDefault();
         const parsed = parseMoneyInput(amount);
         if (!categoryId) {
-          setError("Choose a category.");
+          setError("Category is required.");
           return;
         }
         if (parsed === null || parsed <= 0) {
-          setError("Enter a valid target amount.");
+          setError("Target amount must be greater than zero.");
+          return;
+        }
+        if (isDateBasedGoalType(type) && !dueDate) {
+          setError("Due date is required for date-based goals.");
+          return;
+        }
+        if (categoriesWithGoals.has(categoryId) && mode === "add") {
+          setError("This category already has an active goal.");
           return;
         }
         onSave({
@@ -379,13 +597,20 @@ function GoalEditor({
             value={categoryId}
             onChange={(e) => setCategoryId(e.target.value)}
             className="input"
-            disabled={mode === "edit"}
+            required
           >
+            <option value="">Select category…</option>
             {categoryOptions.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>
             ))}
+            {existing &&
+              !categoryOptions.some((c) => c.id === existing.categoryId) && (
+                <option value={existing.categoryId}>
+                  Unknown / missing category
+                </option>
+              )}
           </select>
         </label>
         <label className="block text-sm">
@@ -419,13 +644,14 @@ function GoalEditor({
         </label>
         <label className="block text-sm">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
-            Due date
+            Due date{isDateBasedGoalType(type) ? " (required)" : ""}
           </span>
           <input
             type="date"
             value={dueDate}
             onChange={(e) => setDueDate(e.target.value)}
             className="input"
+            required={isDateBasedGoalType(type)}
           />
         </label>
         <label className="block text-sm sm:col-span-2">
@@ -440,12 +666,23 @@ function GoalEditor({
         </label>
       </div>
       {error && <p className="text-sm text-danger">{error}</p>}
-      <button
-        type="submit"
-        className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
-      >
-        Save goal
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="submit"
+          className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
+        >
+          Save goal
+        </button>
+        {onDelete && (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="rounded-lg border border-danger/40 px-3 py-2 text-sm font-medium text-danger"
+          >
+            Delete Goal
+          </button>
+        )}
+      </div>
     </form>
   );
 }
