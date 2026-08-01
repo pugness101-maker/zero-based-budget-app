@@ -121,11 +121,27 @@ export function getCategoryDeleteBlockers(
   return blockers;
 }
 
+/** True when category has no hard links (txns/scheduled/imports). Budgets alone OK. */
 export function canPermanentlyDeleteCategory(
   plan: BudgetPlan,
   categoryId: string,
 ): boolean {
-  return getCategoryDeleteBlockers(plan, categoryId).length === 0;
+  const blockers = getCategoryDeleteBlockers(plan, categoryId).filter(
+    (b) => b.code !== "has_budgets" && b.code !== "has_targets",
+  );
+  return blockers.length === 0;
+}
+
+/** Legacy helper: budgets no longer block deletion flows. */
+export function categoryHasOnlyBudgetHistory(
+  plan: BudgetPlan,
+  categoryId: string,
+): boolean {
+  const blockers = getCategoryDeleteBlockers(plan, categoryId);
+  return (
+    blockers.length > 0 &&
+    blockers.every((b) => b.code === "has_budgets" || b.code === "has_targets")
+  );
 }
 
 export function getGroupCategoryCount(

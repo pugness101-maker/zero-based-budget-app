@@ -11,13 +11,26 @@ import { MoneyText } from "@/components/shared/money-text";
 import { CategoryFormModal } from "@/components/budget/category-form-modal";
 import { formatDisplayDate } from "@/lib/dates";
 
-type Tab = "active" | "hidden" | "archived" | "groups";
+type Tab = "active" | "hidden" | "archived" | "deleted" | "groups";
+
+const DELETION_LABELS: Record<string, string> = {
+  empty: "Unused delete",
+  budget_history: "Deleted with budget history",
+  move_then_delete: "Moved history, then deleted",
+  archive: "Archived",
+  force_uncategorized: "Force → Uncategorized",
+  merge: "Merged",
+  purge: "Purged",
+};
 
 export function CategoriesSettings() {
   const plan = useBudgetStore((s) => s.plan);
   const monthKey = useBudgetStore((s) => s.selectedMonthKey);
   const unhideCategory = useBudgetStore((s) => s.unhideCategory);
   const hideCategory = useBudgetStore((s) => s.hideCategory);
+  const unarchiveCategory = useBudgetStore((s) => s.unarchiveCategory);
+  const restoreCategory = useBudgetStore((s) => s.restoreCategory);
+  const purgeCategory = useBudgetStore((s) => s.purgeCategory);
   const bulkHideCategories = useBudgetStore((s) => s.bulkHideCategories);
   const bulkUnhideCategories = useBudgetStore((s) => s.bulkUnhideCategories);
   const bulkMoveCategories = useBudgetStore((s) => s.bulkMoveCategories);
@@ -56,6 +69,7 @@ export function CategoriesSettings() {
   }, [summary]);
 
   const categories = plan.categories.filter((c) => {
+    if (tab === "deleted") return Boolean(c.deletedAt);
     if (c.deletedAt) return false;
     if (tab === "active") return !c.hidden && !c.isArchived;
     if (tab === "hidden") return c.hidden && !c.isArchived;
@@ -100,6 +114,7 @@ export function CategoriesSettings() {
             ["active", "Active"],
             ["hidden", "Hidden"],
             ["archived", "Archived"],
+            ["deleted", "Deleted / Recently Removed"],
             ["groups", "Category Groups"],
           ] as const
         ).map(([id, label]) => (
@@ -118,7 +133,7 @@ export function CategoriesSettings() {
         ))}
       </div>
 
-      {tab !== "groups" && (
+      {tab !== "groups" && tab !== "deleted" && (
         <>
           <div className="grid gap-2 sm:grid-cols-2">
             <input
@@ -241,16 +256,26 @@ export function CategoriesSettings() {
                             : "Active"}
                       </td>
                       <td className="px-2 py-2 text-right space-x-2 whitespace-nowrap">
-                        <button
-                          type="button"
-                          className="text-xs text-accent hover:underline"
-                          onClick={() =>
-                            setModal({ mode: "edit", categoryId: c.id })
-                          }
-                        >
-                          Edit
-                        </button>
-                        {c.hidden ? (
+                        {tab !== "archived" && (
+                          <button
+                            type="button"
+                            className="text-xs text-accent hover:underline"
+                            onClick={() =>
+                              setModal({ mode: "edit", categoryId: c.id })
+                            }
+                          >
+                            Edit
+                          </button>
+                        )}
+                        {tab === "archived" ? (
+                          <button
+                            type="button"
+                            className="text-xs text-accent hover:underline"
+                            onClick={() => unarchiveCategory(c.id)}
+                          >
+                            Restore
+                          </button>
+                        ) : c.hidden ? (
                           <button
                             type="button"
                             className="text-xs text-accent hover:underline"
@@ -278,6 +303,75 @@ export function CategoriesSettings() {
             )}
           </div>
         </>
+      )}
+
+      {tab === "deleted" && (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full min-w-[36rem] text-sm">
+            <thead className="bg-canvas text-left text-[11px] uppercase tracking-wider text-muted">
+              <tr>
+                <th className="px-2 py-2">Name</th>
+                <th className="px-2 py-2">Deleted</th>
+                <th className="px-2 py-2">Method</th>
+                <th className="px-2 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((c) => (
+                <tr key={c.id} className="border-t border-border/70">
+                  <td className="px-2 py-2 font-medium">{c.name}</td>
+                  <td className="px-2 py-2 text-muted">
+                    {c.deletedAt
+                      ? formatDisplayDate(c.deletedAt.slice(0, 10))
+                      : "—"}
+                  </td>
+                  <td className="px-2 py-2 text-xs text-muted">
+                    {c.deletionMethod
+                      ? (DELETION_LABELS[c.deletionMethod] ?? c.deletionMethod)
+                      : "Removed"}
+                    {c.mergedIntoCategoryId
+                      ? ` → ${plan.categories.find((x) => x.id === c.mergedIntoCategoryId)?.name ?? "category"}`
+                      : ""}
+                  </td>
+                  <td className="px-2 py-2 text-right space-x-2 whitespace-nowrap">
+                    <button
+                      type="button"
+                      className="text-xs text-accent hover:underline"
+                      onClick={() => {
+                        const result = restoreCategory(c.id);
+                        if (!result.ok) alert(result.error);
+                      }}
+                    >
+                      Restore
+                    </button>
+                    <button
+                      type="button"
+                      className="text-xs text-danger hover:underline"
+                      onClick={() => {
+                        if (
+                          !confirm(
+                            "Permanently purge this category? This cannot be undone from Settings.",
+                          )
+                        ) {
+                          return;
+                        }
+                        const result = purgeCategory(c.id);
+                        if (!result.ok) alert(result.error);
+                      }}
+                    >
+                      Purge
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filtered.length === 0 && (
+            <p className="px-3 py-4 text-sm text-muted">
+              No recently removed categories.
+            </p>
+          )}
+        </div>
       )}
 
       {tab === "groups" && (

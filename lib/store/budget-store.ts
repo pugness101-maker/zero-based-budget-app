@@ -57,10 +57,30 @@ import {
   renameCategoryGroup as renameCategoryGroupOp,
   reorderCategories as reorderCategoriesOp,
   reorderCategoryGroups as reorderCategoryGroupsOp,
+  unarchiveCategory as unarchiveCategoryOp,
   unhideCategory as unhideCategoryOp,
   type AddCategoryInput,
   type EditCategoryInput,
 } from "@/lib/categories/operations";
+import {
+  applyCategoryDeleteStrategy,
+  purgeDeletedCategory,
+  restoreDeletedCategory,
+  UNCATEGORIZED_ID,
+  type CategoryDeleteStrategy,
+} from "@/lib/categories/deletion";
+
+function remapCategoryImportRules(
+  rules: Record<string, string>,
+  fromId: string,
+  toId: string,
+): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(rules)) {
+    next[key] = value === fromId ? toId : value;
+  }
+  return next;
+}
 import {
   applyAccountEdit,
   assertCanAddTransaction,
@@ -228,7 +248,14 @@ interface BudgetState {
   hideCategory: (categoryId: string) => { ok: boolean; error?: string };
   unhideCategory: (categoryId: string) => { ok: boolean; error?: string };
   archiveCategory: (categoryId: string) => { ok: boolean; error?: string };
+  unarchiveCategory: (categoryId: string) => { ok: boolean; error?: string };
   deleteCategory: (categoryId: string) => { ok: boolean; error?: string };
+  deleteCategoryWithStrategy: (
+    categoryId: string,
+    strategy: CategoryDeleteStrategy,
+  ) => { ok: boolean; error?: string };
+  restoreCategory: (categoryId: string) => { ok: boolean; error?: string };
+  purgeCategory: (categoryId: string) => { ok: boolean; error?: string };
   mergeCategories: (
     sourceId: string,
     destinationId: string,
@@ -305,6 +332,7 @@ function commitHistory(
   next: {
     plan: BudgetPlan;
     importBatches?: ImportBatch[];
+    categoryImportRules?: Record<string, string>;
   },
 ) {
   const before = cloneSnapshot(get().plan, get().importBatches);
@@ -321,6 +349,9 @@ function commitHistory(
   set((s) => ({
     plan: next.plan,
     ...(next.importBatches ? { importBatches: next.importBatches } : {}),
+    ...(next.categoryImportRules
+      ? { categoryImportRules: next.categoryImportRules }
+      : {}),
     undoStack: pushUndoStack(s.undoStack, entry),
     redoStack: [],
     toastMessage: meta.toast ?? s.toastMessage,
@@ -1577,8 +1608,7 @@ export const useBudgetStore = create<BudgetState>()(
           set,
           get,
           {
-            actionType: "category_hide",
-            label: "Archive category",
+            actionType: "category_archive",
             entityType: "category",
             entityId: categoryId,
             toast: "Category archived",
@@ -1587,6 +1617,30 @@ export const useBudgetStore = create<BudgetState>()(
               entityType: "category",
               entityId: categoryId,
               summary: "Archived category",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      unarchiveCategory: (categoryId) => {
+        const result = unarchiveCategoryOp(get().plan, categoryId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_restore",
+            label: "Unarchive category",
+            entityType: "category",
+            entityId: categoryId,
+            toast: "Category restored",
+            audit: {
+              action: "category_edit",
+              entityType: "category",
+              entityId: categoryId,
+              summary: "Unarchived category",
             },
           },
           { plan: result.plan },
@@ -1617,9 +1671,118 @@ export const useBudgetStore = create<BudgetState>()(
         return { ok: true };
       },
 
+      deleteCategoryWithStrategy: (categoryId, strategy) => {
+        const state = get();
+        const result = applyCategoryDeleteStrategy(
+          state.plan,
+          categoryId,
+          state.selectedMonthKey,
+          strategy,
+        );
+        if (!result.ok) return { ok: false, error: result.error };
+
+        let categoryImportRules = state.categoryImportRules;
+        if (strategy.mode === "move_then_delete") {
+          categoryImportRules = remapCategoryImportRules(
+            categoryImportRules,
+            categoryId,
+            strategy.destinationId,
+          );
+        } else if (strategy.mode === "force_uncategorized") {
+          categoryImportRules = remapCategoryImportRules(
+            categoryImportRules,
+            categoryId,
+            UNCATEGORIZED_ID,
+          );
+        }
+
+        const toastByMode: Record<CategoryDeleteStrategy["mode"], string> = {
+          budget_history: "Category and budget history deleted",
+          move_then_delete: "Category history moved, then deleted",
+          archive: "Category archived for current and future months",
+          force_uncategorized: "Category force-deleted to Uncategorized",
+        };
+
+        commitHistory(
+          set,
+          get,
+          {
+            actionType:
+              strategy.mode === "archive"
+                ? "category_archive"
+                : "category_delete",
+            label: toastByMode[strategy.mode],
+            entityType: "category",
+            entityId: categoryId,
+            toast: toastByMode[strategy.mode],
+            audit: {
+              action: "category_delete",
+              entityType: "category",
+              entityId: categoryId,
+              summary: toastByMode[strategy.mode],
+              metadata: { strategy },
+            },
+          },
+          { plan: result.plan, categoryImportRules },
+        );
+        return { ok: true };
+      },
+
+      restoreCategory: (categoryId) => {
+        const result = restoreDeletedCategory(get().plan, categoryId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_restore",
+            entityType: "category",
+            entityId: categoryId,
+            toast: "Category restored",
+            audit: {
+              action: "category_edit",
+              entityType: "category",
+              entityId: categoryId,
+              summary: "Restored deleted category",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      purgeCategory: (categoryId) => {
+        const result = purgeDeletedCategory(get().plan, categoryId);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_delete",
+            label: "Permanently purge category",
+            entityType: "category",
+            entityId: categoryId,
+            toast: "Category permanently removed",
+            audit: {
+              action: "category_delete",
+              entityType: "category",
+              entityId: categoryId,
+              summary: "Purged deleted category",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
       mergeCategories: (sourceId, destinationId) => {
         const result = mergeCategoriesOp(get().plan, sourceId, destinationId);
         if (!result.ok) return { ok: false, error: result.error };
+        const categoryImportRules = remapCategoryImportRules(
+          get().categoryImportRules,
+          sourceId,
+          destinationId,
+        );
         commitHistory(
           set,
           get,
@@ -1636,7 +1799,7 @@ export const useBudgetStore = create<BudgetState>()(
               metadata: { sourceId, destinationId },
             },
           },
-          { plan: result.plan },
+          { plan: result.plan, categoryImportRules },
         );
         return { ok: true };
       },

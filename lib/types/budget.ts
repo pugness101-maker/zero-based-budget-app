@@ -69,6 +69,15 @@ export interface Category {
   isArchived?: boolean;
   deletedAt?: string;
   mergedIntoCategoryId?: string;
+  /** How the category was removed (for Settings → Deleted / restore) */
+  deletionMethod?:
+    | "empty"
+    | "budget_history"
+    | "move_then_delete"
+    | "archive"
+    | "force_uncategorized"
+    | "merge"
+    | "purge";
   /** When false, exclude from new report defaults (history still queryable) */
   reportIncluded?: boolean;
   color?: string;

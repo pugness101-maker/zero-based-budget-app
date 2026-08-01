@@ -24,8 +24,10 @@ export type HistoryActionType =
   | "category_add"
   | "category_edit"
   | "category_delete"
+  | "category_restore"
   | "category_hide"
   | "category_unhide"
+  | "category_archive"
   | "category_move"
   | "category_merge"
   | "category_reorder"
@@ -84,8 +86,10 @@ export function historyLabel(actionType: HistoryActionType): string {
     category_add: "Add category",
     category_edit: "Edit category",
     category_delete: "Delete category",
+    category_restore: "Restore category",
     category_hide: "Hide category",
     category_unhide: "Unhide category",
+    category_archive: "Archive category",
     category_move: "Move category",
     category_merge: "Merge categories",
     category_reorder: "Reorder categories",

@@ -2,18 +2,19 @@ import type {
   BudgetPlan,
   Category,
   CategoryGroup,
-  MonthlyCategoryBudget,
   Target,
   TargetType,
 } from "@/lib/types/budget";
 import type { Cents } from "@/lib/money";
 import type { MonthKey } from "@/lib/dates";
 import {
-  canPermanentlyDeleteCategory,
   findDuplicateCategoryName,
-  getCategoryDeleteBlockers,
   getGroupCategoryCount,
 } from "@/lib/categories/lifecycle";
+import { deleteEmptyOrBudgetOnlyCategory } from "@/lib/categories/deletion";
+import { reassignCategoryId } from "@/lib/categories/reassign";
+
+export { reassignCategoryId } from "@/lib/categories/reassign";
 
 function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -219,109 +220,22 @@ export function archiveCategory(plan: BudgetPlan, categoryId: string): OpResult 
   });
 }
 
+export function unarchiveCategory(
+  plan: BudgetPlan,
+  categoryId: string,
+): OpResult {
+  return editCategory(plan, categoryId, {
+    isArchived: false,
+    hidden: false,
+  });
+}
+
+/** Delete unused category (no hard links). Soft-deletes so restore remains possible. */
 export function deleteCategorySafe(
   plan: BudgetPlan,
   categoryId: string,
 ): OpResult {
-  if (!canPermanentlyDeleteCategory(plan, categoryId)) {
-    const reasons = getCategoryDeleteBlockers(plan, categoryId)
-      .map((b) => b.message)
-      .join(" ");
-    return {
-      ok: false,
-      error: `Cannot permanently delete this category. ${reasons}`,
-    };
-  }
-  return {
-    ok: true,
-    entityId: categoryId,
-    plan: {
-      ...plan,
-      categories: plan.categories.filter((c) => c.id !== categoryId),
-    },
-  };
-}
-
-function reassignCategoryId(
-  plan: BudgetPlan,
-  fromId: string,
-  toId: string,
-): BudgetPlan {
-  const transactions = plan.transactions.map((t) => {
-    let next = t;
-    if (t.categoryId === fromId) {
-      next = { ...next, categoryId: toId };
-    }
-    if (t.splits?.some((s) => s.categoryId === fromId)) {
-      next = {
-        ...next,
-        splits: t.splits.map((s) =>
-          s.categoryId === fromId ? { ...s, categoryId: toId } : s,
-        ),
-      };
-    }
-    return next;
-  });
-
-  const scheduledTransactions = (plan.scheduledTransactions ?? []).map((s) =>
-    s.categoryId === fromId ? { ...s, categoryId: toId } : s,
-  );
-
-  // Merge monthly budgets: sum assigned for same month, drop source rows
-  const destByMonth = new Map<string, MonthlyCategoryBudget>();
-  for (const b of plan.monthlyBudgets) {
-    if (b.categoryId === toId) destByMonth.set(b.monthKey, { ...b });
-  }
-  const mergedBudgets: MonthlyCategoryBudget[] = [];
-  for (const b of plan.monthlyBudgets) {
-    if (b.categoryId === fromId) {
-      const existing = destByMonth.get(b.monthKey);
-      if (existing) {
-        destByMonth.set(b.monthKey, {
-          ...existing,
-          assignedCents: (existing.assignedCents + b.assignedCents) as Cents,
-          activityCents:
-            existing.activityCents != null || b.activityCents != null
-              ? (((existing.activityCents ?? 0) + (b.activityCents ?? 0)) as Cents)
-              : undefined,
-          availableCents:
-            existing.availableCents != null || b.availableCents != null
-              ? (((existing.availableCents ?? 0) +
-                  (b.availableCents ?? 0)) as Cents)
-              : undefined,
-        });
-      } else {
-        destByMonth.set(b.monthKey, { ...b, categoryId: toId });
-      }
-      continue;
-    }
-    if (b.categoryId === toId) continue;
-    mergedBudgets.push(b);
-  }
-  mergedBudgets.push(...destByMonth.values());
-
-  // Move targets that don't conflict; drop source targets if dest already has one
-  const destHasTarget = plan.targets.some((t) => t.categoryId === toId);
-  const targets = plan.targets
-    .filter((t) => t.categoryId !== fromId || !destHasTarget)
-    .map((t) =>
-      t.categoryId === fromId ? { ...t, categoryId: toId } : t,
-    );
-
-  const payees = plan.payees.map((p) =>
-    p.defaultCategoryId === fromId
-      ? { ...p, defaultCategoryId: toId }
-      : p,
-  );
-
-  return {
-    ...plan,
-    transactions,
-    scheduledTransactions,
-    monthlyBudgets: mergedBudgets,
-    targets,
-    payees,
-  };
+  return deleteEmptyOrBudgetOnlyCategory(plan, categoryId);
 }
 
 export function mergeCategories(
@@ -357,6 +271,7 @@ export function mergeCategories(
           ...c,
           deletedAt: new Date().toISOString(),
           mergedIntoCategoryId: destinationId,
+          deletionMethod: "merge" as const,
           hidden: true,
           isArchived: true,
         };

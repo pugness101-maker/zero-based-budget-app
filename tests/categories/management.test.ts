@@ -167,7 +167,12 @@ describe("category management", () => {
     const created = addCategory(plan, { name: "Disposable", groupId });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
-    expect(deleteCategorySafe(created.plan, created.entityId!).ok).toBe(true);
+    const deleted = deleteCategorySafe(created.plan, created.entityId!);
+    expect(deleted.ok).toBe(true);
+    if (!deleted.ok) return;
+    expect(
+      deleted.plan.categories.find((c) => c.id === created.entityId)?.deletedAt,
+    ).toBeTruthy();
 
     const used = plan.categories.find((c) =>
       plan.transactions.some((t) => t.categoryId === c.id),
