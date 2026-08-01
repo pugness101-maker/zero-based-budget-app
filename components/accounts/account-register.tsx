@@ -18,6 +18,35 @@ import { EditAccountModal } from "@/components/accounts/edit-account-modal";
 import { EditTransactionModal } from "@/components/transactions/edit-transaction-modal";
 import { TransactionActions } from "@/components/transactions/transaction-actions";
 import { InlineTextCell } from "@/components/transactions/inline-cell";
+import { SortableHeader } from "@/components/transactions/sort-header";
+import { SortMenu } from "@/components/transactions/sort-menu";
+import {
+  DEFAULT_ACCOUNT_REGISTER_SORT,
+  buildSortContext,
+  criteriaFromPreset,
+  cycleSortCriteria,
+  sortTransactions,
+  type TransactionSortField,
+  type TransactionSortPreset,
+} from "@/lib/transactions/sort";
+import { getSortCriteriaForScope } from "@/lib/transactions/sort-preferences";
+
+const REGISTER_PRESETS: TransactionSortPreset[] = [
+  "newest",
+  "oldest",
+  "highest_amount",
+  "lowest_amount",
+  "largest_outflow",
+  "largest_inflow",
+  "payee_az",
+  "payee_za",
+  "category_az",
+  "category_za",
+  "cleared_first",
+  "uncleared_first",
+  "recently_added",
+  "recently_edited",
+];
 
 export function AccountRegister({ accountId }: { accountId: string }) {
   const plan = useBudgetStore((s) => s.plan);
@@ -27,18 +56,17 @@ export function AccountRegister({ accountId }: { accountId: string }) {
   const updateTransaction = useBudgetStore((s) => s.updateTransaction);
   const unhideAccount = useBudgetStore((s) => s.unhideAccount);
   const reopenAccount = useBudgetStore((s) => s.reopenAccount);
+  const setTransactionSort = useBudgetStore((s) => s.setTransactionSort);
+  const resetTransactionSort = useBudgetStore((s) => s.resetTransactionSort);
 
   const account = plan.accounts.find((a) => a.id === accountId);
   const [showForm, setShowForm] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [editTxnId, setEditTxnId] = useState<string | null>(null);
 
-  const txns = useMemo(
-    () =>
-      plan.transactions
-        .filter((t) => t.accountId === accountId)
-        .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)),
-    [plan.transactions, accountId],
+  const sortCriteria = useMemo(
+    () => getSortCriteriaForScope(plan.preferences, { accountId }),
+    [plan.preferences, accountId],
   );
 
   const running = useMemo(() => {
@@ -50,6 +78,34 @@ export function AccountRegister({ accountId }: { accountId: string }) {
       ]),
     );
   }, [account, plan.transactions]);
+
+  const sortCtx = useMemo(
+    () => buildSortContext(plan.accounts, plan.categories, running),
+    [plan.accounts, plan.categories, running],
+  );
+
+  const txns = useMemo(() => {
+    const filtered = plan.transactions.filter((t) => t.accountId === accountId);
+    return sortTransactions(
+      filtered,
+      sortCriteria,
+      sortCtx,
+      DEFAULT_ACCOUNT_REGISTER_SORT,
+    );
+  }, [plan.transactions, accountId, sortCriteria, sortCtx]);
+
+  function persistSort(next: typeof sortCriteria) {
+    setTransactionSort({ accountId }, next);
+  }
+
+  function onCycleHeader(field: TransactionSortField, shiftKey: boolean) {
+    persistSort(
+      cycleSortCriteria(sortCriteria, field, {
+        shiftKey,
+        defaultCriteria: DEFAULT_ACCOUNT_REGISTER_SORT,
+      }),
+    );
+  }
 
   if (!account) {
     return (
@@ -190,19 +246,66 @@ export function AccountRegister({ accountId }: { accountId: string }) {
         onClose={() => setEditTxnId(null)}
       />
 
+      <SortMenu
+        criteria={sortCriteria}
+        allowedPresets={REGISTER_PRESETS}
+        onSelectPreset={(preset) => persistSort(criteriaFromPreset(preset))}
+        onClear={() => persistSort([...DEFAULT_ACCOUNT_REGISTER_SORT])}
+        onResetDefault={() => resetTransactionSort({ accountId })}
+      />
+
       {/* Desktop */}
-      <div className="hidden md:block overflow-hidden rounded-xl border border-border bg-surface">
+      <div className="hidden md:block max-h-[70vh] overflow-auto rounded-xl border border-border bg-surface">
         <table className="w-full text-sm">
           <thead className="bg-canvas text-left text-[11px] uppercase tracking-wider text-muted">
             <tr>
-              <th className="px-3 py-2.5 w-10">✓</th>
-              <th className="px-3 py-2.5">Date</th>
-              <th className="px-3 py-2.5">Payee</th>
-              <th className="px-3 py-2.5">Category</th>
-              <th className="px-3 py-2.5 text-right">Outflow</th>
-              <th className="px-3 py-2.5 text-right">Inflow</th>
-              <th className="px-3 py-2.5 text-right">Balance</th>
-              <th className="px-3 py-2.5 w-28" />
+              <SortableHeader
+                field="cleared"
+                label="✓"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+                className="w-10"
+              />
+              <SortableHeader
+                field="date"
+                label="Date"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+              />
+              <SortableHeader
+                field="payee"
+                label="Payee"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+              />
+              <SortableHeader
+                field="category"
+                label="Category"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+              />
+              <SortableHeader
+                field="outflow"
+                label="Outflow"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+                align="right"
+              />
+              <SortableHeader
+                field="inflow"
+                label="Inflow"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+                align="right"
+              />
+              <SortableHeader
+                field="runningBalance"
+                label="Balance"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+                align="right"
+              />
+              <th className="sticky top-0 z-10 w-28 bg-canvas px-3 py-2.5" />
             </tr>
           </thead>
           <tbody>

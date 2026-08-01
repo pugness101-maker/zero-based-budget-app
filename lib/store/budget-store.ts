@@ -69,6 +69,12 @@ import {
   UNCATEGORIZED_ID,
   type CategoryDeleteStrategy,
 } from "@/lib/categories/deletion";
+import type { SortCriterion } from "@/lib/transactions/sort";
+import {
+  resetSortPreferences,
+  withUpdatedSortPreferences,
+  type SortPreferenceScope,
+} from "@/lib/transactions/sort-preferences";
 
 function remapCategoryImportRules(
   rules: Record<string, string>,
@@ -238,6 +244,11 @@ interface BudgetState {
   bulkReopenAccounts: (accountIds: string[], keepHidden?: boolean) => void;
   setShowHiddenAccounts: (value: boolean) => void;
   setShowClosedAccounts: (value: boolean) => void;
+  setTransactionSort: (
+    scope: SortPreferenceScope,
+    criteria: SortCriterion[] | null,
+  ) => void;
+  resetTransactionSort: (scope?: SortPreferenceScope) => void;
   addCategory: (
     input: AddCategoryInput,
   ) => { ok: boolean; error?: string; categoryId?: string };
@@ -1499,6 +1510,26 @@ export const useBudgetStore = create<BudgetState>()(
           plan: {
             ...s.plan,
             preferences: { ...s.plan.preferences, showClosedAccounts: value },
+          },
+        })),
+
+      setTransactionSort: (scope, criteria) =>
+        set((s) => ({
+          plan: {
+            ...s.plan,
+            preferences: withUpdatedSortPreferences(
+              s.plan.preferences,
+              scope,
+              criteria,
+            ),
+          },
+        })),
+
+      resetTransactionSort: (scope) =>
+        set((s) => ({
+          plan: {
+            ...s.plan,
+            preferences: resetSortPreferences(s.plan.preferences, scope),
           },
         })),
 

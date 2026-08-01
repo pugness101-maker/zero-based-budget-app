@@ -186,6 +186,19 @@ export interface UserPreferences {
   /** Show Hidden/Closed sections expanded in sidebar */
   showHiddenAccounts?: boolean;
   showClosedAccounts?: boolean;
+  /**
+   * Saved transaction table sorts (per surface / account).
+   * Stored as plain criteria arrays for local demo persistence.
+   */
+  transactionSort?: {
+    allTransactions?: Array<{ field: string; direction: "asc" | "desc" }>;
+    accountRegisters?: Record<
+      string,
+      Array<{ field: string; direction: "asc" | "desc" }>
+    >;
+    importPreview?: Array<{ field: string; direction: "asc" | "desc" }>;
+    scheduled?: Array<{ field: string; direction: "asc" | "desc" }>;
+  };
 }
 
 export interface BudgetPlan {

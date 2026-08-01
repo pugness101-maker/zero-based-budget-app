@@ -15,6 +15,17 @@ import { EditTransactionModal } from "@/components/transactions/edit-transaction
 import { TransactionActions } from "@/components/transactions/transaction-actions";
 import { CategorySelect } from "@/components/shared/category-select";
 import { getSelectableCategories } from "@/lib/categories/lifecycle";
+import { SortableHeader } from "@/components/transactions/sort-header";
+import { SortMenu } from "@/components/transactions/sort-menu";
+import {
+  DEFAULT_ALL_TRANSACTIONS_SORT,
+  buildSortContext,
+  criteriaFromPreset,
+  cycleSortCriteria,
+  sortTransactions,
+  type TransactionSortField,
+} from "@/lib/transactions/sort";
+import { getSortCriteriaForScope } from "@/lib/transactions/sort-preferences";
 
 export function TransactionsView() {
   const searchParams = useSearchParams();
@@ -24,6 +35,8 @@ export function TransactionsView() {
   const deleteTransaction = useBudgetStore((s) => s.deleteTransaction);
   const bulkEditTransactions = useBudgetStore((s) => s.bulkEditTransactions);
   const bulkDeleteTransactions = useBudgetStore((s) => s.bulkDeleteTransactions);
+  const setTransactionSort = useBudgetStore((s) => s.setTransactionSort);
+  const resetTransactionSort = useBudgetStore((s) => s.resetTransactionSort);
 
   const [accountFilter, setAccountFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -40,27 +53,56 @@ export function TransactionsView() {
   const [bulkError, setBulkError] = useState<string | null>(null);
   const batchFilter = searchParams.get("batch");
 
+  const sortCriteria = useMemo(
+    () => getSortCriteriaForScope(plan.preferences, "allTransactions"),
+    [plan.preferences],
+  );
+
+  const sortCtx = useMemo(
+    () => buildSortContext(plan.accounts, plan.categories),
+    [plan.accounts, plan.categories],
+  );
+
   const rows = useMemo(() => {
-    return [...plan.transactions]
-      .filter((t) => {
-        if (batchFilter && t.importBatchId !== batchFilter) return false;
-        if (accountFilter && t.accountId !== accountFilter) return false;
-        if (categoryFilter && t.categoryId !== categoryFilter) return false;
-        if (query) {
-          const q = query.toLowerCase();
-          const hay = `${t.payeeName} ${t.memo ?? ""}`.toLowerCase();
-          if (!hay.includes(q)) return false;
-        }
-        return true;
-      })
-      .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+    const filtered = plan.transactions.filter((t) => {
+      if (batchFilter && t.importBatchId !== batchFilter) return false;
+      if (accountFilter && t.accountId !== accountFilter) return false;
+      if (categoryFilter && t.categoryId !== categoryFilter) return false;
+      if (query) {
+        const q = query.toLowerCase();
+        const hay = `${t.payeeName} ${t.memo ?? ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    return sortTransactions(
+      filtered,
+      sortCriteria,
+      sortCtx,
+      DEFAULT_ALL_TRANSACTIONS_SORT,
+    );
   }, [
     plan.transactions,
     accountFilter,
     categoryFilter,
     query,
     batchFilter,
+    sortCriteria,
+    sortCtx,
   ]);
+
+  function persistSort(next: typeof sortCriteria) {
+    setTransactionSort("allTransactions", next);
+  }
+
+  function onCycleHeader(field: TransactionSortField, shiftKey: boolean) {
+    persistSort(
+      cycleSortCriteria(sortCriteria, field, {
+        shiftKey,
+        defaultCriteria: DEFAULT_ALL_TRANSACTIONS_SORT,
+      }),
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -128,6 +170,15 @@ export function TransactionsView() {
           ))}
         </select>
       </div>
+
+      <SortMenu
+        criteria={sortCriteria}
+        onSelectPreset={(preset) => persistSort(criteriaFromPreset(preset))}
+        onClear={() => persistSort([...DEFAULT_ALL_TRANSACTIONS_SORT])}
+        onResetDefault={() => {
+          resetTransactionSort("allTransactions");
+        }}
+      />
 
       {selected.size > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface p-3 text-sm">
@@ -269,11 +320,11 @@ export function TransactionsView() {
         </div>
       )}
 
-      <div className="hidden md:block overflow-hidden rounded-xl border border-border bg-surface">
+      <div className="hidden md:block max-h-[70vh] overflow-auto rounded-xl border border-border bg-surface">
         <table className="w-full text-sm">
           <thead className="bg-canvas text-left text-[11px] uppercase tracking-wider text-muted">
             <tr>
-              <th className="px-3 py-2.5 w-10">
+              <th className="sticky top-0 z-10 w-10 bg-canvas px-3 py-2.5">
                 <input
                   type="checkbox"
                   aria-label="Select all visible"
@@ -289,12 +340,56 @@ export function TransactionsView() {
                   }}
                 />
               </th>
-              <th className="px-3 py-2.5">Date</th>
-              <th className="px-3 py-2.5">Account</th>
-              <th className="px-3 py-2.5">Payee</th>
-              <th className="px-3 py-2.5">Category</th>
-              <th className="px-3 py-2.5 text-right">Amount</th>
-              <th className="px-3 py-2.5 w-28" />
+              <SortableHeader
+                field="date"
+                label="Date"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+              />
+              <SortableHeader
+                field="account"
+                label="Account"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+              />
+              <SortableHeader
+                field="payee"
+                label="Payee"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+              />
+              <SortableHeader
+                field="category"
+                label="Category"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+              />
+              <SortableHeader
+                field="amount"
+                label="Amount"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+                align="right"
+              />
+              <SortableHeader
+                field="cleared"
+                label="Cleared"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+              />
+              <SortableHeader
+                field="createdAt"
+                label="Created"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+              />
+              <SortableHeader
+                field="updatedAt"
+                label="Edited"
+                criteria={sortCriteria}
+                onCycle={onCycleHeader}
+              />
+              <th className="sticky top-0 z-10 w-28 bg-canvas px-3 py-2.5" />
             </tr>
           </thead>
           <tbody>
@@ -329,6 +424,19 @@ export function TransactionsView() {
                   <td className="px-3 py-2 text-muted">{category}</td>
                   <td className="px-3 py-2 text-right font-medium">
                     <MoneyText cents={t.amountCents} signed />
+                  </td>
+                  <td className="px-3 py-2 capitalize text-muted">
+                    {t.cleared}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap text-muted text-xs">
+                    {t.createdAt
+                      ? formatDisplayDate(t.createdAt.slice(0, 10))
+                      : "—"}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap text-muted text-xs">
+                    {t.updatedAt
+                      ? formatDisplayDate(t.updatedAt.slice(0, 10))
+                      : "—"}
                   </td>
                   <td className="px-3 py-2 text-right">
                     <TransactionActions
