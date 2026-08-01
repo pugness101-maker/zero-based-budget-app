@@ -6,6 +6,8 @@ import { createDemoPlan } from "@/lib/seed/demo-plan";
 import type {
   BudgetPlan,
   ClearedStatus,
+  Target,
+  TargetType,
   Transaction,
 } from "@/lib/types/budget";
 import type { MonthKey } from "@/lib/dates";
@@ -36,6 +38,15 @@ interface BudgetState {
     date: string;
     memo?: string;
   }) => void;
+  addTarget: (input: {
+    categoryId: string;
+    type: TargetType;
+    amountCents: Cents;
+    dueDate?: string;
+    notes?: string;
+  }) => string;
+  updateTarget: (id: string, patch: Partial<Target>) => void;
+  deleteTarget: (id: string) => void;
   resetDemoData: () => void;
   setHydrated: (value: boolean) => void;
 }
@@ -190,6 +201,40 @@ export const useBudgetStore = create<BudgetState>()(
           },
         }));
       },
+
+      addTarget: ({ categoryId, type, amountCents, dueDate, notes }) => {
+        const id = newId("tgt");
+        const target: Target = {
+          id,
+          categoryId,
+          type,
+          amountCents,
+          dueDate,
+          notes,
+        };
+        set((s) => ({
+          plan: { ...s.plan, targets: [...s.plan.targets, target] },
+        }));
+        return id;
+      },
+
+      updateTarget: (id, patch) =>
+        set((s) => ({
+          plan: {
+            ...s.plan,
+            targets: s.plan.targets.map((t) =>
+              t.id === id ? { ...t, ...patch } : t,
+            ),
+          },
+        })),
+
+      deleteTarget: (id) =>
+        set((s) => ({
+          plan: {
+            ...s.plan,
+            targets: s.plan.targets.filter((t) => t.id !== id),
+          },
+        })),
 
       resetDemoData: () => {
         const plan = createDemoPlan();

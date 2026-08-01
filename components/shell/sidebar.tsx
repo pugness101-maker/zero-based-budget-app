@@ -25,20 +25,8 @@ const navItems = [
   { href: "/plan", label: "Plan", icon: LayoutGrid },
   { href: "/accounts", label: "Accounts", icon: Wallet },
   { href: "/transactions", label: "All Transactions", icon: ArrowLeftRight },
-  {
-    href: "/goals",
-    label: "Goals",
-    icon: Target,
-    disabled: true,
-    reason: "Goals UI ships in the next Phase 1 increment.",
-  },
-  {
-    href: "/reports",
-    label: "Reports",
-    icon: BarChart3,
-    disabled: true,
-    reason: "Reports ship in the next Phase 1 increment.",
-  },
+  { href: "/goals", label: "Goals", icon: Target },
+  { href: "/reports", label: "Reports", icon: BarChart3 },
   {
     href: "/debt",
     label: "Debt",
@@ -93,11 +81,12 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
         {navItems.map((item) => {
           const Icon = item.icon;
+          const disabled = "disabled" in item && item.disabled;
           const active =
-            !("disabled" in item && item.disabled) &&
+            !disabled &&
             (pathname === item.href || pathname.startsWith(`${item.href}/`));
 
-          if ("disabled" in item && item.disabled) {
+          if (disabled) {
             return (
               <div
                 key={item.label}
