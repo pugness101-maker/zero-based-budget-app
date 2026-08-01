@@ -128,6 +128,10 @@ import {
   type AccountDeleteStrategy,
 } from "@/lib/accounts/deletion";
 import {
+  applySimplifiedDefaultTemplate as applySimplifiedDefaultTemplateOp,
+  type TemplateGroupMapping,
+} from "@/lib/categories/apply-default-template";
+import {
   applyBulkDelete,
   applyBulkTransactionPatch,
   applyTransactionEdit,
@@ -357,6 +361,16 @@ interface BudgetState {
   bulkReopenAccounts: (accountIds: string[], keepHidden?: boolean) => void;
   setShowHiddenAccounts: (value: boolean) => void;
   setShowClosedAccounts: (value: boolean) => void;
+  setEnableTrackingLiabilities: (value: boolean) => void;
+  addTrackingAccount: (input: {
+    name: string;
+    type: AccountType;
+    startingBalanceCents?: Cents;
+    isLiability?: boolean;
+  }) => { ok: boolean; error?: string; id?: string };
+  applySimplifiedDefaultTemplate: (
+    mapping: TemplateGroupMapping,
+  ) => { ok: boolean; error?: string };
   setSettingsCategoryGroupExpanded: (
     groupId: string,
     expanded: boolean,
@@ -2078,6 +2092,91 @@ export const useBudgetStore = create<BudgetState>()(
             preferences: { ...s.plan.preferences, showClosedAccounts: value },
           },
         })),
+
+      setEnableTrackingLiabilities: (value) =>
+        set((s) => ({
+          plan: {
+            ...s.plan,
+            preferences: {
+              ...s.plan.preferences,
+              enableTrackingLiabilities: value,
+            },
+          },
+        })),
+
+      addTrackingAccount: (input) => {
+        const name = input.name.trim();
+        if (!name) return { ok: false, error: "Account name is required." };
+        const isLiability = Boolean(input.isLiability);
+        if (isLiability && !get().plan.preferences.enableTrackingLiabilities) {
+          return {
+            ok: false,
+            error: "Enable Tracking Liabilities in Settings first.",
+          };
+        }
+        const id = newId("acct");
+        const sortOrder =
+          Math.max(0, ...get().plan.accounts.map((a) => a.sortOrder)) + 1;
+        const account = {
+          id,
+          name,
+          type: input.type,
+          kind: "tracking" as const,
+          startingBalanceCents: input.startingBalanceCents ?? 0,
+          currency: get().plan.currency,
+          closed: false,
+          isHidden: false,
+          sortOrder,
+        };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_edit",
+            entityType: "account",
+            entityId: id,
+            toast: `Added ${name}`,
+            audit: {
+              action: "account_edit",
+              entityType: "account",
+              entityId: id,
+              summary: `Added tracking ${isLiability ? "liability" : "asset"} ${name}`,
+            },
+          },
+          {
+            plan: {
+              ...get().plan,
+              accounts: [...get().plan.accounts, account],
+            },
+          },
+        );
+        return { ok: true, id };
+      },
+
+      applySimplifiedDefaultTemplate: (mapping) => {
+        get().createBackup(
+          "Before apply simplified default template",
+          "pre_destructive_migration",
+        );
+        const result = applySimplifiedDefaultTemplateOp(get().plan, mapping);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "category_group_edit",
+            entityType: "category_group",
+            toast: "Applied simplified default template",
+            audit: {
+              action: "category_group_change",
+              entityType: "category_group",
+              summary: "Applied simplified default category groups template",
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
 
       setSettingsCategoryGroupExpanded: (groupId, expanded) =>
         set((s) => ({

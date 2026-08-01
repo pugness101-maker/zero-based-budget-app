@@ -23,6 +23,10 @@ import { getAllAccountBalances } from "@/lib/calculations/account-balances";
 import { MoneyText } from "@/components/shared/money-text";
 import { DisabledAction } from "@/components/shared/disabled-action";
 import { isAccountClosed } from "@/lib/accounts/lifecycle";
+import {
+  isTrackingAssetAccount,
+  isTrackingLiabilityAccount,
+} from "@/lib/seed/default-templates";
 import type { Account } from "@/lib/types/budget";
 
 const navItems = [
@@ -56,8 +60,11 @@ export function Sidebar() {
     (a) => a.kind === "on_budget" && active(a),
   );
   const credit = plan.accounts.filter((a) => a.kind === "credit" && active(a));
-  const tracking = plan.accounts.filter(
-    (a) => a.kind === "tracking" && active(a),
+  const trackingAssets = plan.accounts.filter(
+    (a) => isTrackingAssetAccount(a) && active(a),
+  );
+  const trackingLiabilities = plan.accounts.filter(
+    (a) => isTrackingLiabilityAccount(a) && active(a),
   );
   const hidden = plan.accounts.filter(
     (a) => !a.deletedAt && !isAccountClosed(a) && a.isHidden,
@@ -166,11 +173,19 @@ export function Sidebar() {
               onToggle={() => toggleSection("Credit")}
             />
             <AccountSection
-              title="Tracking"
-              accounts={tracking}
+              title="Tracking Assets"
+              accounts={trackingAssets}
               balances={balances}
-              collapsed={Boolean(collapsedSections.Tracking)}
-              onToggle={() => toggleSection("Tracking")}
+              collapsed={Boolean(collapsedSections["Tracking Assets"])}
+              onToggle={() => toggleSection("Tracking Assets")}
+            />
+            {/* Hidden until at least one liability account exists */}
+            <AccountSection
+              title="Tracking Liabilities"
+              accounts={trackingLiabilities}
+              balances={balances}
+              collapsed={Boolean(collapsedSections["Tracking Liabilities"])}
+              onToggle={() => toggleSection("Tracking Liabilities")}
             />
             {(showHiddenPref || hidden.length > 0) && (
               <AccountSection

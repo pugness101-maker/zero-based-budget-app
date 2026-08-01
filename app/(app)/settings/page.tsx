@@ -15,6 +15,7 @@ import { AccountsSettings } from "@/components/settings/accounts-settings";
 import { CategoriesSettings } from "@/components/settings/categories-settings";
 import { PayeesSettings } from "@/components/settings/payees-settings";
 import { ExportPanel } from "@/components/settings/export-panel";
+import { TrackingAccountsSettings } from "@/components/settings/tracking-accounts-settings";
 
 const moreLinks = [
   { href: "/goals", label: "Goals", icon: Target, detail: "Targets and funding progress" },
@@ -71,6 +72,8 @@ export default function SettingsPage() {
       <ExportPanel onOpenImport={() => setWizardOpen(true)} />
 
       <AccountsSettings />
+
+      <TrackingAccountsSettings />
 
       <CategoriesSettings />
 

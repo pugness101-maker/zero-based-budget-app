@@ -231,6 +231,11 @@ export interface UserPreferences {
   /** Soft-deleted account recovery window (days). Default 30. */
   deletedAccountRetentionDays?: number;
   /**
+   * When true, Settings can add Tracking Liability accounts.
+   * Sidebar still hides the section until at least one exists.
+   */
+  enableTrackingLiabilities?: boolean;
+  /**
    * Saved transaction table sorts (per surface / account).
    * Stored as plain criteria arrays for local demo persistence.
    */

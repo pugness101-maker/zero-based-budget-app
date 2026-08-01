@@ -134,7 +134,10 @@ describe("category management", () => {
     if (!empty.ok) return;
     expect(deleteCategoryGroupSafe(empty.plan, empty.entityId!).ok).toBe(true);
 
-    const nonempty = plan.categoryGroups[0]!;
+    const nonempty = plan.categoryGroups.find((g) =>
+      plan.categories.some((c) => c.groupId === g.id && !c.deletedAt),
+    )!;
+    expect(nonempty).toBeTruthy();
     const blocked = deleteCategoryGroupSafe(plan, nonempty.id);
     expect(blocked.ok).toBe(false);
   });

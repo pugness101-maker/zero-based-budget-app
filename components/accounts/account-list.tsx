@@ -7,6 +7,10 @@ import { MoneyText } from "@/components/shared/money-text";
 import { DisabledAction } from "@/components/shared/disabled-action";
 import type { Account } from "@/lib/types/budget";
 import { isAccountClosed } from "@/lib/accounts/lifecycle";
+import {
+  isTrackingAssetAccount,
+  isTrackingLiabilityAccount,
+} from "@/lib/seed/default-templates";
 
 export function AccountList() {
   const plan = useBudgetStore((s) => s.plan);
@@ -14,6 +18,10 @@ export function AccountList() {
 
   const active = (a: Account) =>
     !a.deletedAt && !isAccountClosed(a) && !a.isHidden;
+
+  const trackingLiabilities = plan.accounts.filter(
+    (a) => isTrackingLiabilityAccount(a) && active(a),
+  );
 
   const sections: { title: string; accounts: Account[] }[] = [
     {
@@ -25,9 +33,17 @@ export function AccountList() {
       accounts: plan.accounts.filter((a) => a.kind === "credit" && active(a)),
     },
     {
-      title: "Tracking",
-      accounts: plan.accounts.filter((a) => a.kind === "tracking" && active(a)),
+      title: "Tracking Assets",
+      accounts: plan.accounts.filter((a) => isTrackingAssetAccount(a) && active(a)),
     },
+    ...(trackingLiabilities.length > 0
+      ? [
+          {
+            title: "Tracking Liabilities",
+            accounts: trackingLiabilities,
+          },
+        ]
+      : []),
   ];
 
   return (

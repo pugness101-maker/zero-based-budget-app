@@ -235,6 +235,9 @@ export function migratePlanAccounts(plan: BudgetPlan): BudgetPlan {
       ...plan.preferences,
       showHiddenAccounts: plan.preferences.showHiddenAccounts ?? false,
       showClosedAccounts: plan.preferences.showClosedAccounts ?? false,
+      // Existing budgets keep false — do not invent liability accounts
+      enableTrackingLiabilities:
+        plan.preferences.enableTrackingLiabilities ?? false,
     },
   };
 }

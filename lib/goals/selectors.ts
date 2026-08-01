@@ -1,5 +1,6 @@
 import { getAccountBalance } from "@/lib/calculations/account-balances";
 import { isAccountClosed, isAccountHidden } from "@/lib/accounts/lifecycle";
+import { isTrackingLiabilityAccount } from "@/lib/seed/default-templates";
 import type {
   Account,
   AccountBudgetKind,
@@ -113,14 +114,10 @@ export function buildGroupedCategoryOptions(input: {
 export function accountSectionFor(account: Account): AccountPickerSection {
   if (account.kind === "on_budget") return "On Budget";
   if (account.kind === "credit") return "Credit";
-  if (
-    account.type === "auto_loan" ||
-    account.type === "student_loan" ||
-    account.type === "personal_loan" ||
-    account.type === "mortgage" ||
-    account.type === "liability_tracking"
-  ) {
-    return "Tracking Liabilities";
+  if (account.kind === "tracking") {
+    return isTrackingLiabilityAccount(account)
+      ? "Tracking Liabilities"
+      : "Tracking Assets";
   }
   return "Tracking Assets";
 }

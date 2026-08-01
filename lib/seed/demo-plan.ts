@@ -1,13 +1,37 @@
 import { dollarsToCents } from "@/lib/money";
 import type { BudgetPlan } from "@/lib/types/budget";
+import {
+  buildDefaultCategoryGroups,
+  DEFAULT_TRACKING_ASSET_DEFS,
+} from "@/lib/seed/default-templates";
 
 const MONTH = "2026-08";
 
 /**
  * Realistic college-student demo plan for EveryDollarFlow.
  * All money values are integer cents.
+ * Defaults: simplified category groups + Brokerage/Retirement/HSA tracking assets.
+ * No tracking liabilities by default.
  */
 export function createDemoPlan(): BudgetPlan {
+  const trackingAssets = DEFAULT_TRACKING_ASSET_DEFS.map((def, i) => ({
+    id: def.id,
+    name: def.name,
+    type: def.type,
+    kind: "tracking" as const,
+    startingBalanceCents:
+      def.id === "acct-brokerage"
+        ? dollarsToCents(1000)
+        : def.id === "acct-retirement"
+          ? dollarsToCents(2500)
+          : dollarsToCents(400),
+    currency: "USD",
+    institution: def.institution,
+    closed: false,
+    isHidden: false,
+    sortOrder: 3 + i,
+  }));
+
   return {
     id: "plan-demo-1",
     name: "Campus Life Plan",
@@ -18,6 +42,7 @@ export function createDemoPlan(): BudgetPlan {
       timezone: "America/Chicago",
       currency: "USD",
       firstDayOfWeek: 0,
+      enableTrackingLiabilities: false,
     },
     accounts: [
       {
@@ -59,40 +84,13 @@ export function createDemoPlan(): BudgetPlan {
         isHidden: false,
         sortOrder: 2,
       },
-      {
-        id: "acct-brokerage",
-        name: "Brokerage Tracking",
-        type: "investment_tracking",
-        kind: "tracking",
-        startingBalanceCents: dollarsToCents(1000),
-        currency: "USD",
-        institution: "Fidelity",
-        closed: false,
-        isHidden: false,
-        sortOrder: 3,
-      },
+      ...trackingAssets,
     ],
-    categoryGroups: [
-      { id: "grp-giving", name: "Giving", sortOrder: 0, hidden: false },
-      { id: "grp-bills", name: "Bills", sortOrder: 1, hidden: false },
-      { id: "grp-college", name: "College", sortOrder: 2, hidden: false },
-      {
-        id: "grp-transport",
-        name: "Transportation",
-        sortOrder: 3,
-        hidden: false,
-      },
-      { id: "grp-food", name: "Food", sortOrder: 4, hidden: false },
-      { id: "grp-personal", name: "Personal", sortOrder: 5, hidden: false },
-      { id: "grp-fitness", name: "Fitness", sortOrder: 6, hidden: false },
-      { id: "grp-savings", name: "Savings", sortOrder: 7, hidden: false },
-      { id: "grp-fun", name: "Fun", sortOrder: 8, hidden: false },
-      { id: "grp-debt", name: "Debt", sortOrder: 9, hidden: false },
-    ],
+    categoryGroups: buildDefaultCategoryGroups(),
     categories: [
       {
         id: "cat-tithe",
-        groupId: "grp-giving",
+        groupId: "grp-gifts",
         name: "Tithe",
         sortOrder: 0,
         hidden: false,
@@ -116,7 +114,7 @@ export function createDemoPlan(): BudgetPlan {
       },
       {
         id: "cat-tuition",
-        groupId: "grp-college",
+        groupId: "grp-education",
         name: "Tuition",
         sortOrder: 0,
         hidden: false,
@@ -124,7 +122,7 @@ export function createDemoPlan(): BudgetPlan {
       },
       {
         id: "cat-books",
-        groupId: "grp-college",
+        groupId: "grp-education",
         name: "Books",
         sortOrder: 1,
         hidden: false,
@@ -135,6 +133,14 @@ export function createDemoPlan(): BudgetPlan {
         groupId: "grp-transport",
         name: "Gas",
         sortOrder: 0,
+        hidden: false,
+        rollover: true,
+      },
+      {
+        id: "cat-travel",
+        groupId: "grp-transport",
+        name: "Travel",
+        sortOrder: 1,
         hidden: false,
         rollover: true,
       },
@@ -165,7 +171,7 @@ export function createDemoPlan(): BudgetPlan {
       },
       {
         id: "cat-mma",
-        groupId: "grp-fitness",
+        groupId: "grp-health",
         name: "MMA",
         sortOrder: 0,
         hidden: false,
@@ -181,33 +187,25 @@ export function createDemoPlan(): BudgetPlan {
       },
       {
         id: "cat-investing",
-        groupId: "grp-savings",
+        groupId: "grp-investments",
         name: "Investing",
-        sortOrder: 1,
-        hidden: false,
-        rollover: true,
-      },
-      {
-        id: "cat-travel",
-        groupId: "grp-fun",
-        name: "Travel",
         sortOrder: 0,
         hidden: false,
         rollover: true,
       },
       {
         id: "cat-fun-money",
-        groupId: "grp-fun",
+        groupId: "grp-entertainment",
         name: "Fun Money",
-        sortOrder: 1,
+        sortOrder: 0,
         hidden: false,
         rollover: true,
       },
       {
         id: "cat-cc-payment",
-        groupId: "grp-debt",
+        groupId: "grp-bills",
         name: "Credit Card Payment",
-        sortOrder: 0,
+        sortOrder: 2,
         hidden: false,
         rollover: true,
       },
