@@ -176,7 +176,8 @@ export function buildReportDataset(
   let assetCents = 0;
   let liabilityCents = 0;
   for (const account of plan.accounts) {
-    if (account.closed) continue;
+    if (account.deletedAt) continue;
+    // Include closed accounts so net-worth history is preserved
     if (
       filters.accountIds.length > 0 &&
       !filters.accountIds.includes(account.id)

@@ -4,6 +4,8 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createDemoPlan } from "@/lib/seed/demo-plan";
 import type {
+  AccountBudgetKind,
+  AccountType,
   BudgetPlan,
   ClearedStatus,
   Target,
@@ -36,6 +38,21 @@ import { parseJsonBackup } from "@/lib/imports/parse-json-backup";
 import { commitYnabZipImport as commitYnabZip } from "@/lib/imports/ynab/commit-ynab-zip";
 import type { YnabZipCommitInput } from "@/lib/imports/ynab/commit-ynab-zip";
 import { IMPORT_SCHEMA_VERSION } from "@/lib/types/import";
+import { migratePlanAccounts } from "@/lib/accounts/lifecycle";
+import {
+  applyAccountEdit,
+  assertCanAddTransaction,
+  assertCanTransferTo,
+  bulkCloseAccounts as bulkCloseAccountsOp,
+  bulkReopenAccounts as bulkReopenAccountsOp,
+  bulkSetHidden,
+  closeAccount as closeAccountOp,
+  deleteAccountSafe,
+  hideAccount as hideAccountOp,
+  reopenAccount as reopenAccountOp,
+  unhideAccount as unhideAccountOp,
+  type CloseAccountInput,
+} from "@/lib/accounts/operations";
 
 interface BudgetState {
   plan: BudgetPlan;
@@ -109,6 +126,34 @@ interface BudgetState {
   dismissImportPrompt: () => void;
   resetDemoData: () => void;
   setHydrated: (value: boolean) => void;
+  updateAccount: (
+    accountId: string,
+    patch: {
+      name?: string;
+      note?: string;
+      type?: AccountType;
+      kind?: AccountBudgetKind;
+      isHidden?: boolean;
+    },
+  ) => void;
+  hideAccount: (accountId: string) => void;
+  unhideAccount: (accountId: string) => void;
+  closeAccount: (
+    input: CloseAccountInput,
+  ) => { ok: boolean; error?: string };
+  reopenAccount: (
+    accountId: string,
+    keepHidden?: boolean,
+  ) => { ok: boolean; error?: string };
+  deleteAccount: (accountId: string) => { ok: boolean; error?: string };
+  bulkHideAccounts: (accountIds: string[]) => void;
+  bulkUnhideAccounts: (accountIds: string[]) => void;
+  bulkCloseAccounts: (
+    accountIds: string[],
+  ) => { ok: boolean; error?: string };
+  bulkReopenAccounts: (accountIds: string[], keepHidden?: boolean) => void;
+  setShowHiddenAccounts: (value: boolean) => void;
+  setShowClosedAccounts: (value: boolean) => void;
 }
 
 function newId(prefix: string) {
@@ -191,6 +236,11 @@ export const useBudgetStore = create<BudgetState>()(
         }),
 
       addTransaction: (input) => {
+        const account = get().plan.accounts.find((a) => a.id === input.accountId);
+        const blocked = assertCanAddTransaction(account);
+        if (blocked) {
+          throw new Error(blocked);
+        }
         const id = newId("txn");
         const txn: Transaction = {
           ...input,
@@ -236,11 +286,16 @@ export const useBudgetStore = create<BudgetState>()(
         })),
 
       addTransfer: ({ fromAccountId, toAccountId, amountCents, date, memo }) => {
+        const from = get().plan.accounts.find((a) => a.id === fromAccountId);
+        const to = get().plan.accounts.find((a) => a.id === toAccountId);
+        const fromBlocked = assertCanAddTransaction(from);
+        if (fromBlocked) throw new Error(fromBlocked);
+        const toBlocked = assertCanTransferTo(to);
+        if (toBlocked) throw new Error(toBlocked);
+
         const transferId = newId("xfer");
         const outId = newId("txn");
         const inId = newId("txn");
-        const from = get().plan.accounts.find((a) => a.id === fromAccountId);
-        const to = get().plan.accounts.find((a) => a.id === toAccountId);
 
         const outTxn: Transaction = {
           id: outId,
@@ -731,6 +786,186 @@ export const useBudgetStore = create<BudgetState>()(
       },
 
       setHydrated: (value) => set({ hydrated: value }),
+
+      updateAccount: (accountId, patch) =>
+        set((s) => ({
+          plan: applyAccountEdit(s.plan, accountId, patch),
+          auditEvents: [
+            auditEvent({
+              action: "account_edit",
+              entityType: "account",
+              entityId: accountId,
+              summary: `Updated account settings`,
+              metadata: patch as Record<string, unknown>,
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        })),
+
+      hideAccount: (accountId) =>
+        set((s) => ({
+          plan: hideAccountOp(s.plan, accountId),
+          auditEvents: [
+            auditEvent({
+              action: "account_hide",
+              entityType: "account",
+              entityId: accountId,
+              summary: "Hid account from sidebar",
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        })),
+
+      unhideAccount: (accountId) =>
+        set((s) => ({
+          plan: unhideAccountOp(s.plan, accountId),
+          auditEvents: [
+            auditEvent({
+              action: "account_unhide",
+              entityType: "account",
+              entityId: accountId,
+              summary: "Unhid account",
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        })),
+
+      closeAccount: (input) => {
+        const result = closeAccountOp(get().plan, input);
+        if (!result.ok) return { ok: false, error: result.error };
+        set((s) => ({
+          plan: result.plan,
+          auditEvents: [
+            auditEvent({
+              action: "account_close",
+              entityType: "account",
+              entityId: input.accountId,
+              summary: `Closed account (${input.strategy})`,
+              metadata: {
+                strategy: input.strategy,
+                transferToAccountId: input.transferToAccountId,
+                reason: input.reason,
+              },
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        }));
+        return { ok: true };
+      },
+
+      reopenAccount: (accountId, keepHidden = false) => {
+        const result = reopenAccountOp(get().plan, { accountId, keepHidden });
+        if (!result.ok) return { ok: false, error: result.error };
+        set((s) => ({
+          plan: result.plan,
+          auditEvents: [
+            auditEvent({
+              action: "account_reopen",
+              entityType: "account",
+              entityId: accountId,
+              summary: keepHidden
+                ? "Reopened account (kept hidden)"
+                : "Reopened account",
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        }));
+        return { ok: true };
+      },
+
+      deleteAccount: (accountId) => {
+        const result = deleteAccountSafe(get().plan, accountId);
+        if (!result.ok) return { ok: false, error: result.error };
+        set((s) => ({
+          plan: result.plan,
+          auditEvents: [
+            auditEvent({
+              action: "account_delete",
+              entityType: "account",
+              entityId: accountId,
+              summary: "Permanently deleted empty account",
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        }));
+        return { ok: true };
+      },
+
+      bulkHideAccounts: (accountIds) =>
+        set((s) => ({
+          plan: bulkSetHidden(s.plan, accountIds, true),
+          auditEvents: [
+            auditEvent({
+              action: "bulk_action",
+              entityType: "account",
+              summary: `Hid ${accountIds.length} account(s)`,
+              metadata: { accountIds, action: "hide" },
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        })),
+
+      bulkUnhideAccounts: (accountIds) =>
+        set((s) => ({
+          plan: bulkSetHidden(s.plan, accountIds, false),
+          auditEvents: [
+            auditEvent({
+              action: "bulk_action",
+              entityType: "account",
+              summary: `Unhid ${accountIds.length} account(s)`,
+              metadata: { accountIds, action: "unhide" },
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        })),
+
+      bulkCloseAccounts: (accountIds) => {
+        const result = bulkCloseAccountsOp(get().plan, accountIds, true);
+        if (!result.ok) return { ok: false, error: result.error };
+        set((s) => ({
+          plan: result.plan,
+          auditEvents: [
+            auditEvent({
+              action: "bulk_action",
+              entityType: "account",
+              summary: `Closed ${accountIds.length} account(s)`,
+              metadata: { accountIds, action: "close" },
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        }));
+        return { ok: true };
+      },
+
+      bulkReopenAccounts: (accountIds, keepHidden = false) =>
+        set((s) => ({
+          plan: bulkReopenAccountsOp(s.plan, accountIds, keepHidden),
+          auditEvents: [
+            auditEvent({
+              action: "bulk_action",
+              entityType: "account",
+              summary: `Reopened ${accountIds.length} account(s)`,
+              metadata: { accountIds, action: "reopen", keepHidden },
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        })),
+
+      setShowHiddenAccounts: (value) =>
+        set((s) => ({
+          plan: {
+            ...s.plan,
+            preferences: { ...s.plan.preferences, showHiddenAccounts: value },
+          },
+        })),
+
+      setShowClosedAccounts: (value) =>
+        set((s) => ({
+          plan: {
+            ...s.plan,
+            preferences: { ...s.plan.preferences, showClosedAccounts: value },
+          },
+        })),
     }),
     {
       name: "edf-budget-demo",
@@ -748,6 +983,9 @@ export const useBudgetStore = create<BudgetState>()(
         importPromptDismissed: state.importPromptDismissed,
       }),
       onRehydrateStorage: () => (state) => {
+        if (state?.plan) {
+          state.plan = migratePlanAccounts(state.plan);
+        }
         state?.setHydrated(true);
       },
     },

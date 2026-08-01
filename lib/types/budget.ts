@@ -31,7 +31,16 @@ export interface Account {
   institution?: string;
   lastFour?: string;
   note?: string;
+  /** Legacy flag — kept in sync with closedAt */
   closed: boolean;
+  /** Hidden from normal sidebar navigation (not closed) */
+  isHidden?: boolean;
+  closedAt?: string;
+  closedReason?: string;
+  /** e.g. "ynab" when created via YNAB ZIP import */
+  importedSource?: string;
+  /** Soft delete only — permanent removal when safe */
+  deletedAt?: string;
   sortOrder: number;
 }
 
@@ -79,6 +88,8 @@ export interface ScheduledTransaction {
   importBatchId?: string;
   importId?: string;
   status: "pending" | "approved" | "skipped";
+  /** Set when account close pauses a pending scheduled txn for review */
+  pausedByAccountClose?: boolean;
 }
 
 export type TargetType =
@@ -141,6 +152,9 @@ export interface UserPreferences {
   timezone: string;
   currency: string;
   firstDayOfWeek: 0 | 1;
+  /** Show Hidden/Closed sections expanded in sidebar */
+  showHiddenAccounts?: boolean;
+  showClosedAccounts?: boolean;
 }
 
 export interface BudgetPlan {

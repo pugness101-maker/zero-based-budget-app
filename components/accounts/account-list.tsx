@@ -6,23 +6,27 @@ import { getAllAccountBalances } from "@/lib/calculations/account-balances";
 import { MoneyText } from "@/components/shared/money-text";
 import { DisabledAction } from "@/components/shared/disabled-action";
 import type { Account } from "@/lib/types/budget";
+import { isAccountClosed } from "@/lib/accounts/lifecycle";
 
 export function AccountList() {
   const plan = useBudgetStore((s) => s.plan);
   const balances = getAllAccountBalances(plan.accounts, plan.transactions);
 
+  const active = (a: Account) =>
+    !a.deletedAt && !isAccountClosed(a) && !a.isHidden;
+
   const sections: { title: string; accounts: Account[] }[] = [
     {
       title: "On budget",
-      accounts: plan.accounts.filter((a) => a.kind === "on_budget" && !a.closed),
+      accounts: plan.accounts.filter((a) => a.kind === "on_budget" && active(a)),
     },
     {
       title: "Credit cards",
-      accounts: plan.accounts.filter((a) => a.kind === "credit" && !a.closed),
+      accounts: plan.accounts.filter((a) => a.kind === "credit" && active(a)),
     },
     {
       title: "Tracking",
-      accounts: plan.accounts.filter((a) => a.kind === "tracking" && !a.closed),
+      accounts: plan.accounts.filter((a) => a.kind === "tracking" && active(a)),
     },
   ];
 

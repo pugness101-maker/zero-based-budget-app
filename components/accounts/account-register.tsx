@@ -13,15 +13,20 @@ import { DisabledAction } from "@/components/shared/disabled-action";
 import { formatDisplayDate, toISODate } from "@/lib/dates";
 import { parseMoneyInput } from "@/lib/money";
 import { cn } from "@/lib/utils";
+import { isAccountClosed, isAccountHidden } from "@/lib/accounts/lifecycle";
+import { EditAccountModal } from "@/components/accounts/edit-account-modal";
 
 export function AccountRegister({ accountId }: { accountId: string }) {
   const plan = useBudgetStore((s) => s.plan);
   const addTransaction = useBudgetStore((s) => s.addTransaction);
   const setCleared = useBudgetStore((s) => s.setCleared);
   const deleteTransaction = useBudgetStore((s) => s.deleteTransaction);
+  const unhideAccount = useBudgetStore((s) => s.unhideAccount);
+  const reopenAccount = useBudgetStore((s) => s.reopenAccount);
 
   const account = plan.accounts.find((a) => a.id === accountId);
   const [showForm, setShowForm] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
 
   const txns = useMemo(
     () =>
@@ -53,6 +58,8 @@ export function AccountRegister({ accountId }: { accountId: string }) {
   }
 
   const balance = getAccountBalance(account, plan.transactions);
+  const closed = isAccountClosed(account);
+  const hidden = isAccountHidden(account);
 
   return (
     <div className="px-4 py-4 md:px-6 space-y-4">
@@ -65,33 +72,94 @@ export function AccountRegister({ accountId }: { accountId: string }) {
             <ArrowLeft className="h-3.5 w-3.5" />
             Accounts
           </Link>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {account.name}
-          </h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {account.name}
+            </h1>
+            {closed && (
+              <span className="rounded-md bg-black/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                Closed
+              </span>
+            )}
+            {hidden && (
+              <span className="rounded-md bg-accent-muted px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">
+                Hidden
+              </span>
+            )}
+          </div>
           <p className="mt-1 text-sm text-muted">
-            Working balance{" "}
+            {closed ? "Final balance" : "Working balance"}{" "}
             <MoneyText cents={balance.balanceCents} className="font-semibold text-ink" />
             {" · "}
             Cleared{" "}
             <MoneyText cents={balance.clearedBalanceCents} />
           </p>
+          {closed && account.closedAt && (
+            <p className="mt-1 text-xs text-muted">
+              Closed {formatDisplayDate(account.closedAt.slice(0, 10))}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
+          {closed ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm("Reopen this account and restore it to the sidebar?")) {
+                  reopenAccount(accountId, false);
+                }
+              }}
+              className="inline-flex items-center rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
+            >
+              Reopen Account
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowForm((v) => !v)}
+              className="inline-flex items-center rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
+            >
+              Add transaction
+            </button>
+          )}
+          {hidden && (
+            <button
+              type="button"
+              onClick={() => unhideAccount(accountId)}
+              className="inline-flex items-center rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-black/5"
+            >
+              Unhide
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setShowForm((v) => !v)}
-            className="inline-flex items-center rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover"
+            onClick={() => setShowEdit(true)}
+            className="inline-flex items-center rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-black/5"
           >
-            Add transaction
+            Edit Account
           </button>
-          <DisabledAction
-            label="Reconcile"
-            reason="Reconciliation workflow ships in a later Phase 1 increment."
-          />
+          {closed ? (
+            <DisabledAction
+              label="Reconcile"
+              reason="Reopen this account before reconciling."
+            />
+          ) : (
+            <DisabledAction
+              label="Reconcile"
+              reason="Reconciliation workflow ships in a later Phase 1 increment."
+            />
+          )}
         </div>
       </div>
 
-      {showForm && (
+      {closed && (
+        <p className="rounded-lg border border-border bg-canvas px-3 py-2 text-sm text-muted">
+          This account is closed. Historical transactions remain readable. Add
+          Transaction and Reconcile stay disabled until you reopen.
+        </p>
+      )}
+
+      {showForm && !closed && (
         <TransactionForm
           accountId={accountId}
           categories={plan.categories}
@@ -102,6 +170,12 @@ export function AccountRegister({ accountId }: { accountId: string }) {
           }}
         />
       )}
+
+      <EditAccountModal
+        accountId={accountId}
+        open={showEdit}
+        onClose={() => setShowEdit(false)}
+      />
 
       {/* Desktop */}
       <div className="hidden md:block overflow-hidden rounded-xl border border-border bg-surface">

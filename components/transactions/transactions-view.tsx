@@ -8,6 +8,9 @@ import { formatDisplayDate, toISODate } from "@/lib/dates";
 import { parseMoneyInput } from "@/lib/money";
 import { ImportWizard } from "@/components/imports/import-wizard";
 import { ImportPrompt } from "@/components/imports/import-prompt";
+import { getActiveAccounts, isAccountClosed } from "@/lib/accounts/lifecycle";
+import { AccountSelect } from "@/components/shared/account-select";
+import type { Account } from "@/lib/types/budget";
 
 export function TransactionsView() {
   const searchParams = useSearchParams();
@@ -135,19 +138,29 @@ export function TransactionsView() {
 
           {mode === "transaction" ? (
             <AddTxnForm
-              accounts={plan.accounts}
+              accounts={getActiveAccounts(plan.accounts)}
               categories={plan.categories}
               onSubmit={(data) => {
-                addTransaction(data);
-                setShowForm(false);
+                try {
+                  addTransaction(data);
+                  setShowForm(false);
+                } catch (err) {
+                  alert(err instanceof Error ? err.message : "Could not add.");
+                }
               }}
             />
           ) : (
             <AddTransferForm
-              accounts={plan.accounts.filter((a) => a.kind !== "tracking")}
+              accounts={getActiveAccounts(plan.accounts).filter(
+                (a) => a.kind !== "tracking",
+              )}
               onSubmit={(data) => {
-                addTransfer(data);
-                setShowForm(false);
+                try {
+                  addTransfer(data);
+                  setShowForm(false);
+                } catch (err) {
+                  alert(err instanceof Error ? err.message : "Could not transfer.");
+                }
               }}
             />
           )}
@@ -255,7 +268,7 @@ function AddTxnForm({
   categories,
   onSubmit,
 }: {
-  accounts: { id: string; name: string }[];
+  accounts: Account[];
   categories: { id: string; name: string }[];
   onSubmit: (data: {
     accountId: string;
@@ -267,7 +280,8 @@ function AddTxnForm({
     isTransfer: false;
   }) => void;
 }) {
-  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  const selectable = accounts.filter((a) => !isAccountClosed(a));
+  const [accountId, setAccountId] = useState(selectable[0]?.id ?? "");
   const [payeeName, setPayeeName] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [amount, setAmount] = useState("");
@@ -296,17 +310,11 @@ function AddTxnForm({
         });
       }}
     >
-      <select
+      <AccountSelect
+        accounts={accounts}
         value={accountId}
-        onChange={(e) => setAccountId(e.target.value)}
-        className="input"
-      >
-        {accounts.map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.name}
-          </option>
-        ))}
-      </select>
+        onChange={setAccountId}
+      />
       <input
         type="date"
         value={date}
@@ -363,7 +371,7 @@ function AddTransferForm({
   accounts,
   onSubmit,
 }: {
-  accounts: { id: string; name: string }[];
+  accounts: Account[];
   onSubmit: (data: {
     fromAccountId: string;
     toAccountId: string;
@@ -372,8 +380,11 @@ function AddTransferForm({
     memo?: string;
   }) => void;
 }) {
-  const [fromAccountId, setFrom] = useState(accounts[0]?.id ?? "");
-  const [toAccountId, setTo] = useState(accounts[1]?.id ?? accounts[0]?.id ?? "");
+  const selectable = accounts.filter((a) => !isAccountClosed(a));
+  const [fromAccountId, setFrom] = useState(selectable[0]?.id ?? "");
+  const [toAccountId, setTo] = useState(
+    selectable[1]?.id ?? selectable[0]?.id ?? "",
+  );
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(toISODate(new Date()));
   const [error, setError] = useState<string | null>(null);
@@ -400,28 +411,16 @@ function AddTransferForm({
         });
       }}
     >
-      <select
+      <AccountSelect
+        accounts={accounts}
         value={fromAccountId}
-        onChange={(e) => setFrom(e.target.value)}
-        className="input"
-      >
-        {accounts.map((a) => (
-          <option key={a.id} value={a.id}>
-            From: {a.name}
-          </option>
-        ))}
-      </select>
-      <select
+        onChange={setFrom}
+      />
+      <AccountSelect
+        accounts={accounts}
         value={toAccountId}
-        onChange={(e) => setTo(e.target.value)}
-        className="input"
-      >
-        {accounts.map((a) => (
-          <option key={a.id} value={a.id}>
-            To: {a.name}
-          </option>
-        ))}
-      </select>
+        onChange={setTo}
+      />
       <input
         type="date"
         value={date}

@@ -30,6 +30,7 @@ export function createDemoPlan(): BudgetPlan {
         institution: "Campus Credit Union",
         lastFour: "4821",
         closed: false,
+        isHidden: false,
         sortOrder: 0,
       },
       {
@@ -42,6 +43,7 @@ export function createDemoPlan(): BudgetPlan {
         institution: "Ally",
         lastFour: "9033",
         closed: false,
+        isHidden: false,
         sortOrder: 1,
       },
       {
@@ -54,6 +56,7 @@ export function createDemoPlan(): BudgetPlan {
         institution: "Chase",
         lastFour: "1190",
         closed: false,
+        isHidden: false,
         sortOrder: 2,
       },
       {
@@ -65,6 +68,7 @@ export function createDemoPlan(): BudgetPlan {
         currency: "USD",
         institution: "Fidelity",
         closed: false,
+        isHidden: false,
         sortOrder: 3,
       },
     ],

@@ -161,7 +161,13 @@ export type AuditAction =
   | "reconcile"
   | "move_money"
   | "target_change"
-  | "restore";
+  | "restore"
+  | "account_hide"
+  | "account_unhide"
+  | "account_close"
+  | "account_reopen"
+  | "account_delete"
+  | "account_edit";
 
 export interface AuditEvent {
   id: string;

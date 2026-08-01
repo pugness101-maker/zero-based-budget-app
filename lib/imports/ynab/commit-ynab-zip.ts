@@ -151,6 +151,8 @@ function commitYnabZipImportUnsafe(
       startingBalanceCents: 0,
       currency: plan.currency,
       closed: false,
+      isHidden: false,
+      importedSource: "ynab",
       sortOrder: plan.accounts.length,
     };
     plan = { ...plan, accounts: [...plan.accounts, account] };
@@ -170,6 +172,8 @@ function commitYnabZipImportUnsafe(
         startingBalanceCents: 0,
         currency: plan.currency,
         closed: false,
+        isHidden: false,
+        importedSource: "ynab",
         sortOrder: plan.accounts.length,
       };
       plan = { ...plan, accounts: [...plan.accounts, account] };
@@ -187,6 +191,8 @@ function commitYnabZipImportUnsafe(
           startingBalanceCents: 0,
           currency: plan.currency,
           closed: false,
+          isHidden: false,
+          importedSource: "ynab",
           sortOrder: plan.accounts.length,
         };
         plan = { ...plan, accounts: [...plan.accounts, account] };

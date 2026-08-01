@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -13,6 +14,7 @@ import {
   Plus,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
 } from "lucide-react";
 import { brand } from "@/lib/brand";
 import { cn } from "@/lib/utils";
@@ -20,6 +22,8 @@ import { useBudgetStore } from "@/lib/store/budget-store";
 import { getAllAccountBalances } from "@/lib/calculations/account-balances";
 import { MoneyText } from "@/components/shared/money-text";
 import { DisabledAction } from "@/components/shared/disabled-action";
+import { isAccountClosed } from "@/lib/accounts/lifecycle";
+import type { Account } from "@/lib/types/budget";
 
 const navItems = [
   { href: "/plan", label: "Plan", icon: LayoutGrid },
@@ -43,14 +47,38 @@ export function Sidebar() {
   const toggleSidebar = useBudgetStore((s) => s.toggleSidebar);
   const plan = useBudgetStore((s) => s.plan);
   const balances = getAllAccountBalances(plan.accounts, plan.transactions);
+  const showHiddenPref = Boolean(plan.preferences.showHiddenAccounts);
+
+  const active = (a: Account) =>
+    !a.deletedAt && !isAccountClosed(a) && !a.isHidden;
 
   const onBudget = plan.accounts.filter(
-    (a) => a.kind === "on_budget" && !a.closed,
+    (a) => a.kind === "on_budget" && active(a),
   );
-  const credit = plan.accounts.filter((a) => a.kind === "credit" && !a.closed);
+  const credit = plan.accounts.filter((a) => a.kind === "credit" && active(a));
   const tracking = plan.accounts.filter(
-    (a) => a.kind === "tracking" && !a.closed,
+    (a) => a.kind === "tracking" && active(a),
   );
+  const hidden = plan.accounts.filter(
+    (a) => !a.deletedAt && !isAccountClosed(a) && a.isHidden,
+  );
+  const closed = plan.accounts.filter(
+    (a) => !a.deletedAt && isAccountClosed(a),
+  );
+
+  const [collapsedSections, setCollapsedSections] = useState<
+    Record<string, boolean>
+  >({
+    Hidden: true,
+    Closed: true,
+  });
+
+  function toggleSection(title: string) {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [title]: !prev[title],
+    }));
+  }
 
   return (
     <aside
@@ -82,7 +110,7 @@ export function Sidebar() {
         {navItems.map((item) => {
           const Icon = item.icon;
           const disabled = "disabled" in item && item.disabled;
-          const active =
+          const activeNav =
             !disabled &&
             (pathname === item.href || pathname.startsWith(`${item.href}/`));
 
@@ -110,7 +138,7 @@ export function Sidebar() {
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                 collapsed && "justify-center px-2",
-                active
+                activeNav
                   ? "bg-accent-muted text-accent"
                   : "text-sidebar-fg/80 hover:bg-black/5",
               )}
@@ -122,21 +150,43 @@ export function Sidebar() {
         })}
 
         {!collapsed && (
-          <div className="pt-4 space-y-4">
+          <div className="pt-4 space-y-3">
             <AccountSection
-              title="On budget"
+              title="On Budget"
               accounts={onBudget}
               balances={balances}
+              collapsed={Boolean(collapsedSections["On Budget"])}
+              onToggle={() => toggleSection("On Budget")}
             />
             <AccountSection
               title="Credit"
               accounts={credit}
               balances={balances}
+              collapsed={Boolean(collapsedSections.Credit)}
+              onToggle={() => toggleSection("Credit")}
             />
             <AccountSection
               title="Tracking"
               accounts={tracking}
               balances={balances}
+              collapsed={Boolean(collapsedSections.Tracking)}
+              onToggle={() => toggleSection("Tracking")}
+            />
+            {(showHiddenPref || hidden.length > 0) && (
+              <AccountSection
+                title="Hidden"
+                accounts={hidden}
+                balances={balances}
+                collapsed={collapsedSections.Hidden !== false}
+                onToggle={() => toggleSection("Hidden")}
+              />
+            )}
+            <AccountSection
+              title="Closed"
+              accounts={closed}
+              balances={balances}
+              collapsed={collapsedSections.Closed !== false}
+              onToggle={() => toggleSection("Closed")}
             />
             <DisabledAction
               label="Add Account"
@@ -183,33 +233,58 @@ function AccountSection({
   title,
   accounts,
   balances,
+  collapsed,
+  onToggle,
 }: {
   title: string;
-  accounts: { id: string; name: string }[];
+  accounts: Account[];
   balances: Map<string, { balanceCents: number }>;
+  collapsed: boolean;
+  onToggle: () => void;
 }) {
+  if (accounts.length === 0 && (title === "Hidden" || title === "Closed")) {
+    return null;
+  }
   if (accounts.length === 0) return null;
+
   return (
     <div>
-      <p className="px-3 mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted">
-        {title}
-      </p>
-      <ul className="space-y-0.5">
-        {accounts.map((account) => (
-          <li key={account.id}>
-            <Link
-              href={`/accounts/${account.id}`}
-              className="flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-sm hover:bg-black/5"
-            >
-              <span className="truncate">{account.name}</span>
-              <MoneyText
-                cents={balances.get(account.id)?.balanceCents ?? 0}
-                className="text-xs text-muted"
-              />
-            </Link>
-          </li>
-        ))}
-      </ul>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between px-3 mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-ink"
+      >
+        <span>
+          {title}
+          <span className="ml-1 font-normal normal-case tracking-normal">
+            ({accounts.length})
+          </span>
+        </span>
+        <ChevronDown
+          className={cn(
+            "h-3.5 w-3.5 transition-transform",
+            collapsed && "-rotate-90",
+          )}
+        />
+      </button>
+      {!collapsed && (
+        <ul className="space-y-0.5">
+          {accounts.map((account) => (
+            <li key={account.id}>
+              <Link
+                href={`/accounts/${account.id}`}
+                className="flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-sm hover:bg-black/5"
+              >
+                <span className="truncate">{account.name}</span>
+                <MoneyText
+                  cents={balances.get(account.id)?.balanceCents ?? 0}
+                  className="text-xs text-muted"
+                />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

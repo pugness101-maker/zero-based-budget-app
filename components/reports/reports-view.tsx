@@ -139,14 +139,19 @@ export function ReportsView() {
               className="input min-h-[6.5rem]"
               aria-label="Filter accounts"
             >
-              {plan.accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
+              {plan.accounts
+                .filter((a) => !a.deletedAt)
+                .map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                    {a.isHidden ? " (hidden)" : ""}
+                    {a.closed || a.closedAt ? " (closed)" : ""}
+                  </option>
+                ))}
             </select>
             <p className="mt-1 text-[11px] text-muted">
-              Hold Cmd/Ctrl to multi-select. None selected = all.
+              Hold Cmd/Ctrl to multi-select. None selected = all accounts
+              (including closed history).
             </p>
           </label>
           <label className="block text-sm">

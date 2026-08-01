@@ -12,6 +12,7 @@ import {
 import { brand } from "@/lib/brand";
 import { useBudgetStore } from "@/lib/store/budget-store";
 import { ImportWizard } from "@/components/imports/import-wizard";
+import { AccountsSettings } from "@/components/settings/accounts-settings";
 import { serializePlanBackup } from "@/lib/imports/parse-json-backup";
 import { formatDisplayDate } from "@/lib/dates";
 
@@ -148,6 +149,8 @@ export default function SettingsPage() {
           </p>
         )}
       </section>
+
+      <AccountsSettings />
 
       <section className="rounded-xl border border-border bg-surface p-4 space-y-4">
         <h2 className="text-sm font-semibold">Appearance</h2>

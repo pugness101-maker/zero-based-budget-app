@@ -274,6 +274,7 @@ function createAccount(
     startingBalanceCents: input.startingBalanceCents,
     currency: plan.currency,
     closed: false,
+    isHidden: false,
     sortOrder: plan.accounts.length,
   };
 

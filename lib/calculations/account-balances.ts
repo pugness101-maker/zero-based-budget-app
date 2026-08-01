@@ -23,10 +23,14 @@ export function getAccountBalance(
 export function getAllAccountBalances(
   accounts: Account[],
   transactions: Transaction[],
+  options: { includeClosed?: boolean; includeDeleted?: boolean } = {},
 ): Map<string, AccountBalance> {
+  const includeClosed = options.includeClosed ?? true;
+  const includeDeleted = options.includeDeleted ?? false;
   const map = new Map<string, AccountBalance>();
   for (const account of accounts) {
-    if (account.closed) continue;
+    if (account.deletedAt && !includeDeleted) continue;
+    if ((account.closed || account.closedAt) && !includeClosed) continue;
     map.set(account.id, getAccountBalance(account, transactions));
   }
   return map;

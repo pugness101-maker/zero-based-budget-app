@@ -14,14 +14,35 @@ import type {
   Transaction,
 } from "@/lib/types/budget";
 
+function isClosedAccount(account: Account): boolean {
+  return Boolean(account.closedAt) || account.closed === true;
+}
+
 function onBudgetAccountIds(accounts: Account[]): Set<string> {
   return new Set(
-    accounts.filter((a) => a.kind === "on_budget").map((a) => a.id),
+    accounts
+      .filter((a) => a.kind === "on_budget" && !a.deletedAt)
+      .map((a) => a.id),
   );
 }
 
 function creditAccountIds(accounts: Account[]): Set<string> {
-  return new Set(accounts.filter((a) => a.kind === "credit").map((a) => a.id));
+  return new Set(
+    accounts
+      .filter((a) => a.kind === "credit" && !a.deletedAt)
+      .map((a) => a.id),
+  );
+}
+
+/** Active (non-closed) tracking accounts — closed tracking excluded from plan lists. */
+export function activeTrackingAccountIds(accounts: Account[]): Set<string> {
+  return new Set(
+    accounts
+      .filter(
+        (a) => a.kind === "tracking" && !a.deletedAt && !isClosedAccount(a),
+      )
+      .map((a) => a.id),
+  );
 }
 
 /** Inflows to on-budget accounts that are not transfers. */
