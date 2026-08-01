@@ -199,6 +199,8 @@ export interface UserPreferences {
     importPreview?: Array<{ field: string; direction: "asc" | "desc" }>;
     scheduled?: Array<{ field: string; direction: "asc" | "desc" }>;
   };
+  /** Settings → Categories → Groups expanded group ids */
+  settingsCategoryGroupsExpanded?: Record<string, boolean>;
 }
 
 export interface BudgetPlan {

@@ -16,6 +16,7 @@ import {
   type BulkDialogKind,
 } from "@/components/budget/category-bulk-dialogs";
 import { setManyInSet, toggleIdInSet } from "@/lib/categories/selection";
+import { CategoryGroupsPanel } from "@/components/settings/category-groups-panel";
 
 type Tab = "active" | "hidden" | "archived" | "deleted" | "groups";
 
@@ -40,11 +41,9 @@ export function CategoriesSettings() {
   const bulkUnhideCategories = useBudgetStore((s) => s.bulkUnhideCategories);
   const bulkRestoreCategories = useBudgetStore((s) => s.bulkRestoreCategories);
   const bulkMoveCategories = useBudgetStore((s) => s.bulkMoveCategories);
-  const addCategoryGroup = useBudgetStore((s) => s.addCategoryGroup);
-  const renameCategoryGroup = useBudgetStore((s) => s.renameCategoryGroup);
-  const deleteCategoryGroup = useBudgetStore((s) => s.deleteCategoryGroup);
   const hideCategoryGroup = useBudgetStore((s) => s.hideCategoryGroup);
   const mergeCategoryGroups = useBudgetStore((s) => s.mergeCategoryGroups);
+  const deleteCategoryGroup = useBudgetStore((s) => s.deleteCategoryGroup);
 
   const [tab, setTab] = useState<Tab>("active");
   const [query, setQuery] = useState("");
@@ -500,18 +499,6 @@ export function CategoriesSettings() {
 
       {tab === "groups" && (
         <div className="space-y-3">
-          <button
-            type="button"
-            onClick={() => {
-              const name = prompt("New group name?");
-              if (!name?.trim()) return;
-              const result = addCategoryGroup(name);
-              if (!result.ok) alert(result.error);
-            }}
-            className="rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-black/5"
-          >
-            Add Category Group
-          </button>
           {selectedGroups.size > 0 && (
             <div className="flex flex-wrap gap-2 text-sm">
               <span className="text-muted">{selectedGroups.size} groups</span>
@@ -605,72 +592,10 @@ export function CategoriesSettings() {
               </button>
             </div>
           )}
-          <ul className="divide-y divide-border rounded-lg border border-border">
-            {groups.map((g) => {
-              const count = plan.categories.filter(
-                (c) => c.groupId === g.id && !c.deletedAt,
-              ).length;
-              return (
-                <li
-                  key={g.id}
-                  className="flex items-center justify-between gap-2 px-3 py-2 text-sm"
-                >
-                  <div className="flex items-start gap-2">
-                    <input
-                      type="checkbox"
-                      className="mt-1 accent-[var(--accent)]"
-                      aria-label={`Select group ${g.name}`}
-                      checked={selectedGroups.has(g.id)}
-                      onChange={() =>
-                        setSelectedGroups(toggleIdInSet(selectedGroups, g.id))
-                      }
-                    />
-                    <div>
-                    <p className="font-medium">
-                      {g.name}
-                      {g.hidden ? (
-                        <span className="ml-2 text-xs text-muted">Hidden</span>
-                      ) : null}
-                    </p>
-                    <p className="text-xs text-muted">
-                      {count} categor{count === 1 ? "y" : "ies"}
-                    </p>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      className="text-xs text-accent hover:underline"
-                      onClick={() => {
-                        const name = prompt("Rename group", g.name);
-                        if (!name?.trim()) return;
-                        renameCategoryGroup(g.id, name);
-                      }}
-                    >
-                      Rename
-                    </button>
-                    <button
-                      type="button"
-                      className="text-xs text-muted hover:underline"
-                      onClick={() => hideCategoryGroup(g.id, !g.hidden)}
-                    >
-                      {g.hidden ? "Unhide" : "Hide"}
-                    </button>
-                    <button
-                      type="button"
-                      className="text-xs text-danger hover:underline"
-                      onClick={() => {
-                        const result = deleteCategoryGroup(g.id);
-                        if (!result.ok) alert(result.error);
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+          <CategoryGroupsPanel
+            selectedGroups={selectedGroups}
+            onSelectedGroupsChange={setSelectedGroups}
+          />
         </div>
       )}
 

@@ -253,6 +253,14 @@ interface BudgetState {
   bulkReopenAccounts: (accountIds: string[], keepHidden?: boolean) => void;
   setShowHiddenAccounts: (value: boolean) => void;
   setShowClosedAccounts: (value: boolean) => void;
+  setSettingsCategoryGroupExpanded: (
+    groupId: string,
+    expanded: boolean,
+  ) => void;
+  setAllSettingsCategoryGroupsExpanded: (
+    groupIds: string[],
+    expanded: boolean,
+  ) => void;
   setTransactionSort: (
     scope: SortPreferenceScope,
     criteria: SortCriterion[] | null,
@@ -1546,6 +1554,37 @@ export const useBudgetStore = create<BudgetState>()(
             preferences: { ...s.plan.preferences, showClosedAccounts: value },
           },
         })),
+
+      setSettingsCategoryGroupExpanded: (groupId, expanded) =>
+        set((s) => ({
+          plan: {
+            ...s.plan,
+            preferences: {
+              ...s.plan.preferences,
+              settingsCategoryGroupsExpanded: {
+                ...(s.plan.preferences.settingsCategoryGroupsExpanded ?? {}),
+                [groupId]: expanded,
+              },
+            },
+          },
+        })),
+
+      setAllSettingsCategoryGroupsExpanded: (groupIds, expanded) =>
+        set((s) => {
+          const map: Record<string, boolean> = {
+            ...(s.plan.preferences.settingsCategoryGroupsExpanded ?? {}),
+          };
+          for (const id of groupIds) map[id] = expanded;
+          return {
+            plan: {
+              ...s.plan,
+              preferences: {
+                ...s.plan.preferences,
+                settingsCategoryGroupsExpanded: map,
+              },
+            },
+          };
+        }),
 
       setTransactionSort: (scope, criteria) =>
         set((s) => ({
