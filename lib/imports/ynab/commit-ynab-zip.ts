@@ -28,6 +28,13 @@ import { normalizeCategoryName } from "@/lib/imports/map-categories";
 import { detectDuplicates } from "@/lib/imports/detect-duplicates";
 import { csvRowsToErrorCsv } from "@/lib/imports/parse-csv";
 import type { ImportRow } from "@/lib/types/import";
+import { applyImportScope } from "@/lib/imports/scope/apply-import-scope";
+import { categoryKey } from "@/lib/imports/scope/candidates";
+import type { ImportScopeSelection } from "@/lib/imports/scope/types";
+import {
+  ensureUncategorized,
+  UNCATEGORIZED_ID,
+} from "@/lib/categories/deletion";
 
 export type FutureRowHandling =
   | "import_as_scheduled"
@@ -59,6 +66,8 @@ export interface YnabZipCommitInput {
   mergeMode: MergeMode;
   importDateIso: string;
   duplicateHandling: "skip" | "import_anyway";
+  /** When set, scope is re-applied in the engine (never trust UI-only filters). */
+  importScope?: ImportScopeSelection;
 }
 
 function newId(prefix: string): string {
@@ -126,13 +135,54 @@ function commitYnabZipImportUnsafe(
 
   // 1. Backup is caller's responsibility (already done)
 
-  // 2. Account mapping
+  // 1b. Re-apply import scope server-side / in-engine
+  let registerRows = input.registerRows;
+  let planRows = input.planRows;
+  let scopeResult: ReturnType<typeof applyImportScope> | null = null;
+  if (input.importScope) {
+    scopeResult = applyImportScope({
+      registerRows: input.registerRows,
+      planRows: input.planRows,
+      scope: input.importScope,
+    });
+    if (scopeResult.summary.transfersNeedingReview > 0) {
+      throw new Error(
+        `${scopeResult.summary.transfersNeedingReview} transfer(s) still need review before import.`,
+      );
+    }
+    const categoryReviews = [...scopeResult.rowMeta.values()].filter(
+      (m) => m.disposition === "category_review",
+    ).length;
+    if (categoryReviews > 0) {
+      throw new Error(
+        `${categoryReviews} row(s) with unselected categories still need review before import.`,
+      );
+    }
+    registerRows = scopeResult.registerRows;
+    planRows = scopeResult.planRows;
+  }
+
+  const allowedAccountNorms = scopeResult
+    ? new Set(
+        scopeResult.effectiveAccountNames.map((n) => normalizeCategoryName(n)),
+      )
+    : null;
+  const allowedCategoryKeys = scopeResult
+    ? new Set(scopeResult.effectiveCategoryKeys)
+    : null;
+
+  // 2. Account mapping — only selected / effective accounts
   const accountIdByName = new Map<string, string>();
   for (const acct of plan.accounts) {
     accountIdByName.set(normalizeCategoryName(acct.name), acct.id);
   }
 
-  for (const mapping of input.accountMappings) {
+  const mappingsToApply = input.accountMappings.filter((m) => {
+    if (!allowedAccountNorms) return true;
+    return allowedAccountNorms.has(normalizeCategoryName(m.accountName));
+  });
+
+  for (const mapping of mappingsToApply) {
     const key = normalizeCategoryName(mapping.accountName);
     if (mapping.existingAccountId) {
       accountIdByName.set(key, mapping.existingAccountId);
@@ -160,15 +210,24 @@ function commitYnabZipImportUnsafe(
     createdAccountIds.push(account.id);
   }
 
-  // Ensure any register accounts not in mappings still get created as checking
-  for (const row of input.registerRows) {
-    const key = normalizeCategoryName(row.accountName);
-    if (!accountIdByName.has(key) && row.accountName) {
+  // Create missing effective accounts only (never unselected accounts)
+  for (const row of registerRows) {
+    const names = [row.accountName, row.transferTargetAccount].filter(
+      Boolean,
+    ) as string[];
+    for (const name of names) {
+      const key = normalizeCategoryName(name);
+      if (allowedAccountNorms && !allowedAccountNorms.has(key)) continue;
+      if (accountIdByName.has(key)) continue;
+      const mapping = mappingsToApply.find(
+        (m) => normalizeCategoryName(m.accountName) === key,
+      );
+      const type = mapping?.type ?? "checking";
       const account: Account = {
         id: newId("acct"),
-        name: row.accountName,
-        type: "checking",
-        kind: "on_budget",
+        name,
+        type: toAppAccountType(type),
+        kind: mapping?.kindOverride ?? toAppAccountKind(type),
         startingBalanceCents: 0,
         currency: plan.currency,
         closed: false,
@@ -179,26 +238,6 @@ function commitYnabZipImportUnsafe(
       plan = { ...plan, accounts: [...plan.accounts, account] };
       accountIdByName.set(key, account.id);
       createdAccountIds.push(account.id);
-    }
-    if (row.transferTargetAccount) {
-      const tKey = normalizeCategoryName(row.transferTargetAccount);
-      if (!accountIdByName.has(tKey)) {
-        const account: Account = {
-          id: newId("acct"),
-          name: row.transferTargetAccount,
-          type: "checking",
-          kind: "on_budget",
-          startingBalanceCents: 0,
-          currency: plan.currency,
-          closed: false,
-          isHidden: false,
-          importedSource: "ynab",
-          sortOrder: plan.accounts.length,
-        };
-        plan = { ...plan, accounts: [...plan.accounts, account] };
-        accountIdByName.set(tKey, account.id);
-        createdAccountIds.push(account.id);
-      }
     }
   }
 
@@ -240,6 +279,11 @@ function commitYnabZipImportUnsafe(
   function ensureCategory(groupName: string, categoryName: string): string {
     let key = `${normalizeCategoryName(groupName)}::${normalizeCategoryName(categoryName)}`;
     if (mergeRedirect.has(key)) key = mergeRedirect.get(key)!;
+    if (allowedCategoryKeys && !allowedCategoryKeys.has(key)) {
+      // Fail closed — never create unselected categories
+      plan = ensureUncategorized(plan);
+      return UNCATEGORIZED_ID;
+    }
     const existing = categoryIdByKey.get(key);
     if (existing) return existing;
 
@@ -262,10 +306,40 @@ function commitYnabZipImportUnsafe(
     return category.id;
   }
 
-  // Collect all categories from register + plan
-  for (const row of [...input.registerRows, ...input.planRows]) {
+  function resolveRowCategoryId(
+    row: YnabRegisterRow,
+  ): string | null {
+    const meta = scopeResult?.rowMeta.get(row.rowIndex);
+    if (meta?.categoryIdOverride !== undefined) {
+      if (meta.categoryIdOverride === UNCATEGORIZED_ID) {
+        plan = ensureUncategorized(plan);
+        return UNCATEGORIZED_ID;
+      }
+      return meta.categoryIdOverride;
+    }
+    if (row.isTransfer) return null;
     const resolved = resolveCategoryNames(row);
-    if (resolved) ensureCategory(resolved.groupName, resolved.categoryName);
+    if (!resolved) return null;
+    const key = categoryKey(resolved.groupName, resolved.categoryName);
+    if (allowedCategoryKeys && !allowedCategoryKeys.has(key)) {
+      // Should have been filtered; fail closed as uncategorized
+      plan = ensureUncategorized(plan);
+      return UNCATEGORIZED_ID;
+    }
+    return ensureCategory(resolved.groupName, resolved.categoryName);
+  }
+
+  // Collect only in-scope categories from scoped register + plan
+  for (const row of [...registerRows, ...planRows]) {
+    const resolved = resolveCategoryNames(row);
+    if (!resolved) continue;
+    const key = categoryKey(resolved.groupName, resolved.categoryName);
+    if (allowedCategoryKeys && !allowedCategoryKeys.has(key)) continue;
+    const meta = scopeResult?.rowMeta.get(
+      "rowIndex" in row ? (row as YnabRegisterRow).rowIndex : -1,
+    );
+    if (meta?.categoryIdOverride != null) continue;
+    ensureCategory(resolved.groupName, resolved.categoryName);
   }
 
   // Credit Card Payments → try match payment categories to CC accounts
@@ -300,10 +374,12 @@ function commitYnabZipImportUnsafe(
   // 5. Plan history — preserve YNAB values, do not recalculate
   const monthlyBudgets: MonthlyCategoryBudget[] = [...plan.monthlyBudgets];
   let planImported = 0;
-  for (const row of input.planRows) {
+  for (const row of planRows) {
     if (row.errors.length || !row.monthKey) continue;
     const resolved = resolveCategoryNames(row);
     if (!resolved || row.assignedCents == null) continue;
+    const key = categoryKey(resolved.groupName, resolved.categoryName);
+    if (allowedCategoryKeys && !allowedCategoryKeys.has(key)) continue;
     const categoryId = ensureCategory(
       resolved.groupName,
       resolved.categoryName,
@@ -340,7 +416,7 @@ function commitYnabZipImportUnsafe(
   const payeeIdByName = new Map(
     plan.payees.map((p) => [normalizeCategoryName(p.name), p.id]),
   );
-  for (const row of input.registerRows) {
+  for (const row of registerRows) {
     if (!row.payeeName || row.isTransfer) continue;
     const key = normalizeCategoryName(row.payeeName);
     if (payeeIdByName.has(key)) continue;
@@ -366,7 +442,7 @@ function commitYnabZipImportUnsafe(
 
   // Pre-mark duplicates per account
   const rowsByAccount = new Map<string, YnabRegisterRow[]>();
-  for (const row of input.registerRows) {
+  for (const row of registerRows) {
     const list = rowsByAccount.get(row.accountName) ?? [];
     list.push(row);
     rowsByAccount.set(row.accountName, list);
@@ -390,14 +466,14 @@ function commitYnabZipImportUnsafe(
   // Pair transfers: match Transfer : X outflows with counterpart inflows
   const transferPairs = new Map<number, number>();
   const registerByIndex = new Map(
-    input.registerRows.map((r) => [r.rowIndex, r]),
+    registerRows.map((r) => [r.rowIndex, r]),
   );
 
-  for (const row of input.registerRows) {
+  for (const row of registerRows) {
     if (!row.isTransfer || !row.transferTargetAccount || !row.date) continue;
     const rowAmount = row.amountCents;
     if (rowAmount == null || rowAmount >= 0) continue;
-    const counterpart = input.registerRows.find(
+    const counterpart = registerRows.find(
       (other) =>
         other.rowIndex !== row.rowIndex &&
         other.isTransfer &&
@@ -415,7 +491,12 @@ function commitYnabZipImportUnsafe(
 
   const processedTransfer = new Set<number>();
 
-  for (const row of input.registerRows) {
+  // Preserve original row data in import_rows for the full uploaded set
+  const originalImportRows = input.registerRows.map((r) =>
+    toImportRow(r, input.batch.id),
+  );
+
+  for (const row of registerRows) {
     const baseRow = toImportRow(row, input.batch.id);
 
     if (row.errors.length) {
@@ -467,10 +548,7 @@ function commitYnabZipImportUnsafe(
         const accountId = accountIdByName.get(
           normalizeCategoryName(row.accountName),
         )!;
-        const resolved = resolveCategoryNames(row);
-        const categoryId = resolved
-          ? ensureCategory(resolved.groupName, resolved.categoryName)
-          : null;
+        const categoryId = resolveRowCategoryId(row);
         const schedId = newId("sched");
         const scheduled: ScheduledTransaction = {
           id: schedId,
@@ -584,14 +662,8 @@ function commitYnabZipImportUnsafe(
       continue;
     }
 
-    // Ordinary transaction (including unpaired transfers)
-    const resolved = resolveCategoryNames(row);
-    const categoryId =
-      row.isTransfer
-        ? null
-        : resolved
-          ? ensureCategory(resolved.groupName, resolved.categoryName)
-          : null;
+    // Ordinary transaction (including unpaired transfers / forceOrdinary)
+    const categoryId = resolveRowCategoryId(row);
 
     const txnId = newId("txn");
     const txn: Transaction = {
@@ -644,6 +716,19 @@ function commitYnabZipImportUnsafe(
   }
 
   // 12. Commit batch
+  const selectedAccountIds = createdAccountIds.length
+    ? [
+        ...new Set(
+          [...accountIdByName.entries()]
+            .filter(
+              ([name]) =>
+                !allowedAccountNorms || allowedAccountNorms.has(name),
+            )
+            .map(([, id]) => id),
+        ),
+      ]
+    : undefined;
+
   const batch: ImportBatch = {
     ...input.batch,
     status: "committed",
@@ -654,8 +739,9 @@ function commitYnabZipImportUnsafe(
     skippedRows,
     errorRows,
     completedAt: new Date().toISOString(),
-    dateRangeStart: minDate,
-    dateRangeEnd: maxDate,
+    dateRangeStart:
+      input.importScope?.dateRange.startDate ?? minDate,
+    dateRangeEnd: input.importScope?.dateRange.endDate ?? maxDate,
     balanceEffectCents: balanceEffect,
     createdAccountIds,
     createdCategoryIds,
@@ -664,21 +750,53 @@ function commitYnabZipImportUnsafe(
       ...createdScheduledIds,
     ],
     mappingJson: input.batch.mappingJson ?? {},
+    selectedAccountNames: input.importScope?.selectedAccountNames,
+    selectedAccountIds,
+    selectedCategoryNames: input.importScope?.selectedCategoryKeys,
+    selectedCategoryIds: createdCategoryIds,
+    accountScopeMode: input.importScope?.accountScopeMode,
+    categoryScopeMode: input.importScope?.categoryScopeMode,
+    transferHandlingMode: input.importScope?.transferHandlingMode,
+    unselectedCategoryHandlingMode:
+      input.importScope?.unselectedCategoryHandlingMode,
+    excludedRowCount: scopeResult?.summary.registerExcluded,
+    scopePresetId: input.importScope?.scopePresetId,
     metadata: {
       format: "ynab_zip",
       health: healthIssues.join("; ") || "ok",
       scheduled: String(scheduledRows),
       planRows: String(planImported),
+      scopeRegisterIncluded: String(scopeResult?.summary.registerIncluded ?? registerRows.length),
+      scopePlanIncluded: String(scopeResult?.summary.planIncluded ?? planRows.length),
     },
   };
+
+  // Merge scoped import row statuses onto original row records
+  const statusByIndex = new Map(importRows.map((r) => [r.rowIndex, r]));
+  const preservedRows = originalImportRows.map((r) => {
+    const scoped = statusByIndex.get(r.rowIndex);
+    if (scoped) return scoped;
+    const meta = scopeResult?.rowMeta.get(r.rowIndex);
+    if (meta) {
+      return {
+        ...r,
+        status: "skipped" as const,
+        include: false,
+        errors: [...r.errors, `Excluded by scope (${meta.disposition}).`],
+      };
+    }
+    return r;
+  });
 
   return {
     ok: true,
     plan,
     batch,
-    rows: importRows,
+    rows: preservedRows,
     errorCsv: csvRowsToErrorCsv(
-      importRows.filter((r) => r.status === "invalid" || r.errors.length > 0),
+      preservedRows.filter(
+        (r) => r.status === "invalid" || r.errors.length > 0,
+      ),
     ),
   };
 }

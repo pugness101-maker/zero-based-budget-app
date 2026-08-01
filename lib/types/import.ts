@@ -109,6 +109,26 @@ export interface ImportBatch {
   createdCategoryIds?: string[];
   createdAccountIds?: string[];
   createdTransactionIds?: string[];
+  /** Import scope — selected accounts/categories/date filters */
+  selectedAccountNames?: string[];
+  selectedAccountIds?: string[];
+  selectedCategoryNames?: string[];
+  selectedCategoryIds?: string[];
+  accountScopeMode?: "all" | "selected";
+  categoryScopeMode?: "all" | "selected";
+  transferHandlingMode?:
+    | "include_related_account"
+    | "import_as_normal"
+    | "skip"
+    | "review_one_by_one";
+  unselectedCategoryHandlingMode?:
+    | "add_to_selection"
+    | "map_to_existing"
+    | "import_uncategorized"
+    | "skip"
+    | "review_one_by_one";
+  excludedRowCount?: number;
+  scopePresetId?: string;
   /** Free-form import metadata (health notes, scheduled counts, etc.) */
   metadata?: Record<string, string>;
 }
