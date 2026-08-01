@@ -35,6 +35,12 @@ import {
 } from "@/lib/imports/scope/candidates";
 import type { ImportScopeSelection } from "@/lib/imports/scope/types";
 import { ImportScopeStep } from "@/components/imports/import-scope-step";
+import {
+  accountMappingContinueBlocked,
+  filterMappingsToSelectedAccounts,
+  mappingsForCommit,
+  upsertDraftAccountMappings,
+} from "@/lib/imports/ynab/selected-account-mappings";
 
 const STEPS = [
   "Summary",
@@ -135,17 +141,18 @@ export function YnabZipFlow({
 
   const [step, setStep] = useState(0);
   const [mergeMode, setMergeMode] = useState<MergeMode>("merge");
+  /** Draft mappings for all detected accounts — kept when unselected so reselect restores. */
   const [accountMappings, setAccountMappings] = useState<YnabAccountMapping[]>(
     () =>
-      fullPreview.accounts.map((a) => ({
-        accountName: a.accountName,
-        type: a.suggestedType,
-        existingAccountId: plan.accounts.find(
-          (x) =>
-            normalizeCategoryName(x.name) ===
-            normalizeCategoryName(a.accountName),
-        )?.id,
-      })),
+      upsertDraftAccountMappings(
+        [],
+        fullPreview.accounts.map((a) => a.accountName),
+        (name) =>
+          plan.accounts.find(
+            (x) =>
+              normalizeCategoryName(x.name) === normalizeCategoryName(name),
+          )?.id,
+      ),
   );
   const [merges, setMerges] = useState<YnabCategoryMergeDecision[]>([]);
   const [futureHandling, setFutureHandling] =
@@ -167,14 +174,47 @@ export function YnabZipFlow({
   const [confirmed, setConfirmed] = useState(false);
   const [result, setResult] = useState<ImportCommitResult | null>(null);
 
-  const effectiveMappings = useMemo(() => {
-    const allowed = new Set(
-      scoped.effectiveAccountNames.map((n) => normalizeCategoryName(n)),
+  // Step 3: only accounts explicitly selected in Step 2 (never transfer-related extras)
+  const selectedMappings = useMemo(
+    () =>
+      filterMappingsToSelectedAccounts(
+        accountMappings,
+        scope.selectedAccountNames,
+      ),
+    [accountMappings, scope.selectedAccountNames],
+  );
+
+  const commitMappings = useMemo(
+    () =>
+      mappingsForCommit({
+        draftMappings: accountMappings,
+        selectedAccountNames: scope.selectedAccountNames,
+        effectiveAccountNames: scoped.effectiveAccountNames,
+      }),
+    [
+      accountMappings,
+      scope.selectedAccountNames,
+      scoped.effectiveAccountNames,
+    ],
+  );
+
+  const accountContinue = useMemo(
+    () =>
+      accountMappingContinueBlocked(
+        selectedMappings,
+        scope.selectedAccountNames,
+      ),
+    [selectedMappings, scope.selectedAccountNames],
+  );
+
+  const relatedAccountCount = useMemo(() => {
+    const selected = new Set(
+      scope.selectedAccountNames.map((n) => normalizeCategoryName(n)),
     );
-    return accountMappings.filter((m) =>
-      allowed.has(normalizeCategoryName(m.accountName)),
-    );
-  }, [accountMappings, scoped.effectiveAccountNames]);
+    return scoped.effectiveAccountNames.filter(
+      (n) => !selected.has(normalizeCategoryName(n)),
+    ).length;
+  }, [scope.selectedAccountNames, scoped.effectiveAccountNames]);
 
   const filteredAnnotated = scoped.annotatedRegister.filter((r) => {
     if (previewFilter === "all") return true;
@@ -232,7 +272,7 @@ export function YnabZipFlow({
       batch,
       registerRows,
       planRows,
-      accountMappings: effectiveMappings,
+      accountMappings: commitMappings,
       categoryMerges: merges,
       futureHandling,
       mergeMode,
@@ -242,6 +282,22 @@ export function YnabZipFlow({
     });
     setResult(res);
     setStep(STEPS.length - 1);
+  }
+
+  function handleScopeChange(next: ImportScopeSelection) {
+    setScope(next);
+    // Ensure draft mappings exist for any newly selected accounts; keep unselected drafts
+    setAccountMappings((prev) =>
+      upsertDraftAccountMappings(
+        prev,
+        next.selectedAccountNames,
+        (name) =>
+          plan.accounts.find(
+            (x) =>
+              normalizeCategoryName(x.name) === normalizeCategoryName(name),
+          )?.id,
+      ),
+    );
   }
 
   return (
@@ -306,7 +362,7 @@ export function YnabZipFlow({
             registerRows={registerRows}
             planRows={planRows}
             scope={scope}
-            onChange={setScope}
+            onChange={handleScopeChange}
             scoped={scoped}
           />
         )}
@@ -314,51 +370,69 @@ export function YnabZipFlow({
         {step === 2 && (
           <div className="space-y-3">
             <p className="text-sm text-muted">
-              Confirm types for selected accounts only ({effectiveMappings.length}).
+              Confirm types for selected accounts only ({selectedMappings.length}
+              ).
             </p>
-            <ul className="space-y-2">
-              {effectiveMappings.map((m) => {
-                const suggestion = fullPreview.accounts.find(
-                  (a) => a.accountName === m.accountName,
-                );
-                const idx = accountMappings.findIndex(
-                  (x) => x.accountName === m.accountName,
-                );
-                return (
-                  <li
-                    key={m.accountName}
-                    className="rounded-xl border border-border p-3 grid gap-2 sm:grid-cols-[1fr_12rem] items-center"
-                  >
-                    <div>
-                      <p className="font-medium text-sm">{m.accountName}</p>
-                      <p className="text-xs text-muted">
-                        Suggested: {suggestion?.suggestedType.replaceAll("_", " ")}{" "}
-                        ({suggestion?.confidence})
-                        {m.existingAccountId ? " · matches existing" : " · will create"}
-                      </p>
-                    </div>
-                    <select
-                      className="input"
-                      value={m.type}
-                      onChange={(e) => {
-                        const type = e.target.value as YnabAccountTypeChoice;
-                        setAccountMappings((prev) =>
-                          prev.map((x, i) =>
-                            i === idx ? { ...x, type } : x,
-                          ),
-                        );
-                      }}
+            {selectedMappings.length === 0 ? (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-950">
+                No accounts selected. Go back to Import Scope and select at least
+                one account.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {selectedMappings.map((m) => {
+                  const suggestion = fullPreview.accounts.find(
+                    (a) =>
+                      normalizeCategoryName(a.accountName) ===
+                      normalizeCategoryName(m.accountName),
+                  );
+                  return (
+                    <li
+                      key={m.accountName}
+                      className="rounded-xl border border-border p-3 grid gap-2 sm:grid-cols-[1fr_12rem] items-center"
                     >
-                      {ACCOUNT_TYPES.map((t) => (
-                        <option key={t.value} value={t.value}>
-                          {t.label}
-                        </option>
-                      ))}
-                    </select>
-                  </li>
-                );
-              })}
-            </ul>
+                      <div>
+                        <p className="font-medium text-sm">{m.accountName}</p>
+                        <p className="text-xs text-muted">
+                          Suggested:{" "}
+                          {suggestion?.suggestedType.replaceAll("_", " ")} (
+                          {suggestion?.confidence})
+                          {m.existingAccountId
+                            ? " · matches existing"
+                            : " · will create"}
+                        </p>
+                      </div>
+                      <select
+                        className="input"
+                        value={m.type}
+                        onChange={(e) => {
+                          const type = e.target.value as YnabAccountTypeChoice;
+                          setAccountMappings((prev) =>
+                            prev.map((x) =>
+                              normalizeCategoryName(x.accountName) ===
+                              normalizeCategoryName(m.accountName)
+                                ? { ...x, type }
+                                : x,
+                            ),
+                          );
+                        }}
+                      >
+                        {ACCOUNT_TYPES.map((t) => (
+                          <option key={t.value} value={t.value}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {accountContinue.blocked && (
+              <p className="text-sm text-red-700" role="alert">
+                {accountContinue.reason}
+              </p>
+            )}
           </div>
         )}
 
@@ -543,13 +617,25 @@ export function YnabZipFlow({
               <div>
                 <p className="font-semibold">Accounts</p>
                 <p>
-                  Selected {scope.selectedAccountNames.length} · Creating/matching{" "}
-                  {scoped.effectiveAccountNames.length} · Skipped{" "}
+                  Selected {scope.selectedAccountNames.length} · Mapping{" "}
+                  {selectedMappings.length}
+                  {relatedAccountCount > 0
+                    ? ` · ${relatedAccountCount} related via transfer decisions`
+                    : ""}{" "}
+                  · Skipped{" "}
                   {Math.max(
                     0,
-                    fullPreview.accounts.length - scoped.effectiveAccountNames.length,
+                    fullPreview.accounts.length - scope.selectedAccountNames.length,
                   )}
                 </p>
+                <ul className="mt-1 list-disc pl-5 text-muted">
+                  {selectedMappings.map((m) => (
+                    <li key={m.accountName}>
+                      {m.accountName} → {m.type.replaceAll("_", " ")}
+                      {m.existingAccountId ? " (match)" : " (create)"}
+                    </li>
+                  ))}
+                </ul>
               </div>
               <div>
                 <p className="font-semibold">Categories</p>
@@ -687,8 +773,11 @@ export function YnabZipFlow({
           <button
             type="button"
             disabled={
-              (step === 1 && scopeBlocked) ||
-              (step === 6 && (!confirmed || scopeBlocked))
+              (step === 1 &&
+                (scopeBlocked || scope.selectedAccountNames.length === 0)) ||
+              (step === 2 && accountContinue.blocked) ||
+              (step === 6 &&
+                (!confirmed || scopeBlocked || accountContinue.blocked))
             }
             onClick={() => {
               if (step === 6) runCommit();

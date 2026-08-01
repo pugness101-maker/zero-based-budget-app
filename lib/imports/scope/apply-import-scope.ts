@@ -403,7 +403,8 @@ export function buildDefaultScopeFromRows(input: {
     dateRange: { preset: "all_dates", startDate: null, endDate: null },
     accountScopeMode: "selected",
     categoryScopeMode: "selected",
-    transferHandlingMode: "include_related_account",
+    // Transfers to unselected accounts go to review — never auto-add accounts
+    transferHandlingMode: "review_one_by_one",
     unselectedCategoryHandlingMode: "import_uncategorized",
     categoryMappings: {},
     transferRowDecisions: {},

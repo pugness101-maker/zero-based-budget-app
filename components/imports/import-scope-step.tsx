@@ -513,12 +513,16 @@ export function ImportScopeStep({
         <h4 className="text-xs font-semibold uppercase tracking-wider text-muted">
           Transfer to unselected account
         </h4>
+        <p className="text-xs text-muted">
+          Unselected accounts are not added to account-type mapping. Choose how
+          to handle each cross-account transfer — review is the default.
+        </p>
         {(
           [
+            ["review_one_by_one", "Review one by one (default)"],
             ["include_related_account", "Also include the related account"],
             ["import_as_normal", "Import the selected side as a normal transaction"],
             ["skip", "Skip the transfer"],
-            ["review_one_by_one", "Review one by one"],
           ] as const
         ).map(([value, label]) => (
           <label key={value} className="flex items-center gap-2 text-sm">

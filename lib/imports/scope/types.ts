@@ -173,7 +173,7 @@ export function defaultImportScopeSelection(): ImportScopeSelection {
     dateRange: { preset: "all_dates", startDate: null, endDate: null },
     accountScopeMode: "all",
     categoryScopeMode: "all",
-    transferHandlingMode: "include_related_account",
+    transferHandlingMode: "review_one_by_one",
     unselectedCategoryHandlingMode: "import_uncategorized",
     categoryMappings: {},
     transferRowDecisions: {},
