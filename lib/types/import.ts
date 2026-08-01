@@ -167,7 +167,9 @@ export type AuditAction =
   | "account_close"
   | "account_reopen"
   | "account_delete"
-  | "account_edit";
+  | "account_edit"
+  | "undo"
+  | "redo";
 
 export interface AuditEvent {
   id: string;

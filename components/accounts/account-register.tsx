@@ -15,18 +15,23 @@ import { parseMoneyInput } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { isAccountClosed, isAccountHidden } from "@/lib/accounts/lifecycle";
 import { EditAccountModal } from "@/components/accounts/edit-account-modal";
+import { EditTransactionModal } from "@/components/transactions/edit-transaction-modal";
+import { TransactionActions } from "@/components/transactions/transaction-actions";
+import { InlineTextCell } from "@/components/transactions/inline-cell";
 
 export function AccountRegister({ accountId }: { accountId: string }) {
   const plan = useBudgetStore((s) => s.plan);
   const addTransaction = useBudgetStore((s) => s.addTransaction);
   const setCleared = useBudgetStore((s) => s.setCleared);
   const deleteTransaction = useBudgetStore((s) => s.deleteTransaction);
+  const updateTransaction = useBudgetStore((s) => s.updateTransaction);
   const unhideAccount = useBudgetStore((s) => s.unhideAccount);
   const reopenAccount = useBudgetStore((s) => s.reopenAccount);
 
   const account = plan.accounts.find((a) => a.id === accountId);
   const [showForm, setShowForm] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [editTxnId, setEditTxnId] = useState<string | null>(null);
 
   const txns = useMemo(
     () =>
@@ -177,6 +182,12 @@ export function AccountRegister({ accountId }: { accountId: string }) {
         onClose={() => setShowEdit(false)}
       />
 
+      <EditTransactionModal
+        transactionId={editTxnId}
+        open={Boolean(editTxnId)}
+        onClose={() => setEditTxnId(null)}
+      />
+
       {/* Desktop */}
       <div className="hidden md:block overflow-hidden rounded-xl border border-border bg-surface">
         <table className="w-full text-sm">
@@ -189,7 +200,7 @@ export function AccountRegister({ accountId }: { accountId: string }) {
               <th className="px-3 py-2.5 text-right">Outflow</th>
               <th className="px-3 py-2.5 text-right">Inflow</th>
               <th className="px-3 py-2.5 text-right">Balance</th>
-              <th className="px-3 py-2.5 w-16" />
+              <th className="px-3 py-2.5 w-28" />
             </tr>
           </thead>
           <tbody>
@@ -224,20 +235,80 @@ export function AccountRegister({ accountId }: { accountId: string }) {
                     </button>
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
-                    {formatDisplayDate(t.date)}
+                    <InlineTextCell
+                      type="date"
+                      value={t.date}
+                      displayValue={formatDisplayDate(t.date)}
+                      onSave={(next) => {
+                        try {
+                          updateTransaction(t.id, { date: next });
+                          return true;
+                        } catch {
+                          return false;
+                        }
+                      }}
+                      className="whitespace-nowrap"
+                    />
                   </td>
-                  <td className="px-3 py-2 font-medium">{t.payeeName}</td>
+                  <td className="px-3 py-2 font-medium">
+                    {t.isTransfer ? (
+                      t.payeeName
+                    ) : (
+                      <InlineTextCell
+                        value={t.payeeName}
+                        onSave={(next) => {
+                          if (!next.trim()) return false;
+                          try {
+                            updateTransaction(t.id, { payeeName: next.trim() });
+                            return true;
+                          } catch {
+                            return false;
+                          }
+                        }}
+                      />
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-muted">{categoryName}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {t.amountCents < 0 ? (
-                      <MoneyText cents={Math.abs(t.amountCents)} />
+                      <InlineTextCell
+                        value={(Math.abs(t.amountCents) / 100).toFixed(2)}
+                        onSave={(next) => {
+                          const parsed = parseMoneyInput(next);
+                          if (parsed === null || parsed <= 0) return false;
+                          try {
+                            updateTransaction(t.id, {
+                              amountCents: -parsed,
+                            });
+                            return true;
+                          } catch {
+                            return false;
+                          }
+                        }}
+                        className="text-right"
+                      />
                     ) : (
                       "—"
                     )}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {t.amountCents > 0 ? (
-                      <MoneyText cents={t.amountCents} />
+                      <InlineTextCell
+                        value={(t.amountCents / 100).toFixed(2)}
+                        onSave={(next) => {
+                          const parsed = parseMoneyInput(next);
+                          if (parsed === null || parsed <= 0) return false;
+                          try {
+                            updateTransaction(t.id, {
+                              amountCents: parsed,
+                            });
+                            return true;
+                          } catch {
+                            return false;
+                          }
+                        }}
+                        className="text-right"
+                      />
                     ) : (
                       "—"
                     )}
@@ -246,13 +317,14 @@ export function AccountRegister({ accountId }: { accountId: string }) {
                     <MoneyText cents={running.get(t.id) ?? 0} />
                   </td>
                   <td className="px-3 py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => deleteTransaction(t.id)}
-                      className="text-xs text-muted hover:text-danger"
-                    >
-                      Delete
-                    </button>
+                    <TransactionActions
+                      onEdit={() => setEditTxnId(t.id)}
+                      onDelete={() => {
+                        if (confirm("Delete this transaction?")) {
+                          deleteTransaction(t.id);
+                        }
+                      }}
+                    />
                   </td>
                 </tr>
               );
@@ -275,7 +347,7 @@ export function AccountRegister({ accountId }: { accountId: string }) {
               </div>
               <MoneyText cents={t.amountCents} signed className="font-semibold" />
             </div>
-            <div className="mt-2 flex items-center justify-between">
+            <div className="mt-2 flex items-center justify-between gap-2">
               <button
                 type="button"
                 onClick={() =>
@@ -291,13 +363,14 @@ export function AccountRegister({ accountId }: { accountId: string }) {
               >
                 {t.cleared === "uncleared" ? "Uncleared" : "Cleared"}
               </button>
-              <button
-                type="button"
-                onClick={() => deleteTransaction(t.id)}
-                className="text-xs text-muted hover:text-danger"
-              >
-                Delete
-              </button>
+              <TransactionActions
+                onEdit={() => setEditTxnId(t.id)}
+                onDelete={() => {
+                  if (confirm("Delete this transaction?")) {
+                    deleteTransaction(t.id);
+                  }
+                }}
+              />
             </div>
           </li>
         ))}

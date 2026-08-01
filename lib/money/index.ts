@@ -10,6 +10,11 @@ export function centsToDollars(cents: Cents): number {
   return cents / 100;
 }
 
+/** Plain decimal string for form inputs (no currency symbol). */
+export function centsToDollarString(cents: Cents): string {
+  return centsToDollars(cents).toFixed(2);
+}
+
 export function formatMoney(
   cents: Cents,
   options: {

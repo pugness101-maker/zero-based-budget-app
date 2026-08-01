@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { Sidebar } from "@/components/shell/sidebar";
 import { TopBar } from "@/components/shell/top-bar";
 import { MobileNav } from "@/components/shell/mobile-nav";
+import { ToastHost } from "@/components/shared/toast";
 import { useBudgetStore } from "@/lib/store/budget-store";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -32,6 +33,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         </main>
         <MobileNav />
+        <ToastHost />
       </div>
     </div>
   );

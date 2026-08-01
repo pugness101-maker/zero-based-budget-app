@@ -125,6 +125,13 @@ export interface TransactionSplit {
   memo?: string;
 }
 
+export type TransactionSource =
+  | "manual"
+  | "import"
+  | "scheduled"
+  | "transfer"
+  | "adjustment";
+
 export interface Transaction {
   id: string;
   accountId: string;
@@ -145,6 +152,9 @@ export interface Transaction {
   /** External or generated id used for duplicate detection on re-import */
   importId?: string;
   importBatchId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  source?: TransactionSource;
 }
 
 export interface UserPreferences {

@@ -53,6 +53,23 @@ import {
   unhideAccount as unhideAccountOp,
   type CloseAccountInput,
 } from "@/lib/accounts/operations";
+import {
+  applyBulkDelete,
+  applyBulkTransactionPatch,
+  applyTransactionEdit,
+  createTransaction,
+  type TransactionEditInput,
+} from "@/lib/transactions/edit";
+import {
+  applyRedo,
+  applyUndo,
+  cloneSnapshot,
+  createHistoryEntry,
+  peekRedoLabel,
+  peekUndoLabel,
+  pushUndoStack,
+} from "@/lib/history/action-history";
+import type { HistoryActionType, HistoryEntry } from "@/lib/history/types";
 
 interface BudgetState {
   plan: BudgetPlan;
@@ -68,6 +85,9 @@ interface BudgetState {
   payeeAliasRules: Record<string, string>;
   categoryImportRules: Record<string, string>;
   importPromptDismissed: boolean;
+  undoStack: HistoryEntry[];
+  redoStack: HistoryEntry[];
+  toastMessage: string | null;
   setMonth: (monthKey: MonthKey) => void;
   setSelectedCategory: (categoryId: string | null) => void;
   toggleSidebar: () => void;
@@ -78,8 +98,22 @@ interface BudgetState {
     input: Omit<Transaction, "id" | "approved"> & { approved?: boolean },
   ) => string;
   updateTransaction: (id: string, patch: Partial<Transaction>) => void;
+  editTransaction: (
+    id: string,
+    input: TransactionEditInput,
+  ) => { ok: boolean; error?: string };
   deleteTransaction: (id: string) => void;
   setCleared: (id: string, cleared: ClearedStatus) => void;
+  bulkEditTransactions: (
+    ids: string[],
+    patch: Partial<
+      Pick<
+        Transaction,
+        "categoryId" | "payeeName" | "cleared" | "accountId" | "memo"
+      >
+    >,
+  ) => { ok: boolean; error?: string };
+  bulkDeleteTransactions: (ids: string[]) => void;
   addTransfer: (input: {
     fromAccountId: string;
     toAccountId: string;
@@ -87,6 +121,14 @@ interface BudgetState {
     date: string;
     memo?: string;
   }) => void;
+  undo: () => { ok: boolean; error?: string };
+  redo: () => { ok: boolean; error?: string };
+  canUndo: () => boolean;
+  canRedo: () => boolean;
+  undoLabel: () => string | null;
+  redoLabel: () => string | null;
+  clearToast: () => void;
+  showToast: (message: string) => void;
   addTarget: (input: {
     categoryId: string;
     type: TargetType;
@@ -170,6 +212,53 @@ function auditEvent(
   };
 }
 
+type SetState = (
+  partial:
+    | Partial<BudgetState>
+    | ((state: BudgetState) => Partial<BudgetState>),
+) => void;
+type GetState = () => BudgetState;
+
+function commitHistory(
+  set: SetState,
+  get: GetState,
+  meta: {
+    actionType: HistoryActionType;
+    label?: string;
+    entityType: string;
+    entityId?: string;
+    batchId?: string;
+    toast?: string;
+    audit?: Omit<AuditEvent, "id" | "createdAt"> & { action: AuditAction };
+  },
+  next: {
+    plan: BudgetPlan;
+    importBatches?: ImportBatch[];
+  },
+) {
+  const before = cloneSnapshot(get().plan, get().importBatches);
+  const after = cloneSnapshot(next.plan, next.importBatches ?? get().importBatches);
+  const entry = createHistoryEntry({
+    actionType: meta.actionType,
+    label: meta.label,
+    entityType: meta.entityType,
+    entityId: meta.entityId,
+    batchId: meta.batchId,
+    before,
+    after,
+  });
+  set((s) => ({
+    plan: next.plan,
+    ...(next.importBatches ? { importBatches: next.importBatches } : {}),
+    undoStack: pushUndoStack(s.undoStack, entry),
+    redoStack: [],
+    toastMessage: meta.toast ?? s.toastMessage,
+    auditEvents: meta.audit
+      ? [auditEvent(meta.audit), ...s.auditEvents].slice(0, 100)
+      : s.auditEvents,
+  }));
+}
+
 export const useBudgetStore = create<BudgetState>()(
   persist(
     (set, get) => ({
@@ -186,6 +275,9 @@ export const useBudgetStore = create<BudgetState>()(
       payeeAliasRules: {},
       categoryImportRules: {},
       importPromptDismissed: false,
+      undoStack: [],
+      redoStack: [],
+      toastMessage: null,
 
       setMonth: (monthKey) => set({ selectedMonthKey: monthKey }),
 
@@ -216,74 +308,222 @@ export const useBudgetStore = create<BudgetState>()(
           },
         })),
 
-      setAssigned: (categoryId, assignedCents) =>
-        set((s) => {
-          const monthKey = s.selectedMonthKey;
-          const existing = s.plan.monthlyBudgets.find(
-            (b) => b.categoryId === categoryId && b.monthKey === monthKey,
-          );
-          const monthlyBudgets = existing
-            ? s.plan.monthlyBudgets.map((b) =>
-                b.categoryId === categoryId && b.monthKey === monthKey
-                  ? { ...b, assignedCents }
-                  : b,
-              )
-            : [
-                ...s.plan.monthlyBudgets,
-                { categoryId, monthKey, assignedCents },
-              ];
-          return { plan: { ...s.plan, monthlyBudgets } };
-        }),
-
-      addTransaction: (input) => {
-        const account = get().plan.accounts.find((a) => a.id === input.accountId);
-        const blocked = assertCanAddTransaction(account);
-        if (blocked) {
-          throw new Error(blocked);
-        }
-        const id = newId("txn");
-        const txn: Transaction = {
-          ...input,
-          id,
-          approved: input.approved ?? true,
-        };
-        set((s) => ({
-          plan: { ...s.plan, transactions: [txn, ...s.plan.transactions] },
-        }));
-        return id;
+      setAssigned: (categoryId, assignedCents) => {
+        const monthKey = get().selectedMonthKey;
+        const existing = get().plan.monthlyBudgets.find(
+          (b) => b.categoryId === categoryId && b.monthKey === monthKey,
+        );
+        const monthlyBudgets = existing
+          ? get().plan.monthlyBudgets.map((b) =>
+              b.categoryId === categoryId && b.monthKey === monthKey
+                ? { ...b, assignedCents }
+                : b,
+            )
+          : [
+              ...get().plan.monthlyBudgets,
+              { categoryId, monthKey, assignedCents },
+            ];
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "move_money",
+            entityType: "category",
+            entityId: categoryId,
+            toast: "Assignment updated",
+            audit: {
+              action: "move_money",
+              entityType: "category",
+              entityId: categoryId,
+              summary: "Moved money / changed assignment",
+            },
+          },
+          { plan: { ...get().plan, monthlyBudgets } },
+        );
       },
 
-      updateTransaction: (id, patch) =>
-        set((s) => ({
-          plan: {
-            ...s.plan,
-            transactions: s.plan.transactions.map((t) =>
-              t.id === id ? { ...t, ...patch } : t,
-            ),
+      addTransaction: (input) => {
+        const result = createTransaction(get().plan, input);
+        if (!result.ok) throw new Error(result.error);
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "add_transaction",
+            entityType: "transaction",
+            entityId: result.transaction.id,
+            toast: "Transaction added",
+            audit: {
+              action: "create",
+              entityType: "transaction",
+              entityId: result.transaction.id,
+              summary: `Added transaction ${result.transaction.payeeName}`,
+            },
           },
-        })),
+          { plan: result.plan },
+        );
+        return result.transaction.id;
+      },
 
-      deleteTransaction: (id) =>
-        set((s) => {
-          const target = s.plan.transactions.find((t) => t.id === id);
-          let transactions = s.plan.transactions.filter((t) => t.id !== id);
-          if (target?.transferPairId) {
-            transactions = transactions.filter(
-              (t) => t.id !== target.transferPairId,
-            );
-          }
-          return { plan: { ...s.plan, transactions } };
-        }),
-
-      setCleared: (id, cleared) =>
-        set((s) => ({
-          plan: {
-            ...s.plan,
-            transactions: s.plan.transactions.map((t) =>
-              t.id === id ? { ...t, cleared } : t,
-            ),
+      updateTransaction: (id, patch) => {
+        const existing = get().plan.transactions.find((t) => t.id === id);
+        if (!existing) return;
+        const result = applyTransactionEdit(get().plan, id, {
+          accountId: patch.accountId ?? existing.accountId,
+          date: patch.date ?? existing.date,
+          payeeName: patch.payeeName ?? existing.payeeName,
+          categoryId:
+            patch.categoryId !== undefined
+              ? patch.categoryId
+              : existing.categoryId,
+          memo: patch.memo !== undefined ? patch.memo : existing.memo,
+          amountCents: patch.amountCents ?? existing.amountCents,
+          cleared: patch.cleared ?? existing.cleared,
+          flag: patch.flag !== undefined ? patch.flag : existing.flag,
+          splits: patch.splits !== undefined ? patch.splits : existing.splits,
+          transferAccountId: existing.transferPairId
+            ? get().plan.transactions.find((t) => t.id === existing.transferPairId)
+                ?.accountId
+            : undefined,
+        });
+        if (!result.ok) throw new Error(result.error);
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "edit_transaction",
+            entityType: "transaction",
+            entityId: id,
+            toast: "Transaction updated",
+            audit: {
+              action: "edit",
+              entityType: "transaction",
+              entityId: id,
+              summary: `Edited transaction ${result.transaction.payeeName}`,
+            },
           },
-        })),
+          { plan: result.plan },
+        );
+      },
+
+      editTransaction: (id, input) => {
+        const result = applyTransactionEdit(get().plan, id, input);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "edit_transaction",
+            entityType: "transaction",
+            entityId: id,
+            toast: "Transaction updated",
+            audit: {
+              action: "edit",
+              entityType: "transaction",
+              entityId: id,
+              summary: `Edited transaction ${result.transaction.payeeName}`,
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      deleteTransaction: (id) => {
+        const target = get().plan.transactions.find((t) => t.id === id);
+        if (!target) return;
+        const next = applyBulkDelete(get().plan, [id]);
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "delete_transaction",
+            entityType: "transaction",
+            entityId: id,
+            toast: "Transaction deleted",
+            audit: {
+              action: "delete",
+              entityType: "transaction",
+              entityId: id,
+              summary: `Deleted transaction ${target.payeeName}`,
+            },
+          },
+          { plan: next.plan },
+        );
+      },
+
+      setCleared: (id, cleared) => {
+        const existing = get().plan.transactions.find((t) => t.id === id);
+        if (!existing || existing.cleared === cleared) return;
+        const plan = {
+          ...get().plan,
+          transactions: get().plan.transactions.map((t) =>
+            t.id === id
+              ? { ...t, cleared, updatedAt: new Date().toISOString() }
+              : t,
+          ),
+        };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "set_cleared",
+            entityType: "transaction",
+            entityId: id,
+            audit: {
+              action: "edit",
+              entityType: "transaction",
+              entityId: id,
+              summary: `Set cleared status to ${cleared}`,
+            },
+          },
+          { plan },
+        );
+      },
+
+      bulkEditTransactions: (ids, patch) => {
+        const result = applyBulkTransactionPatch(get().plan, ids, patch);
+        if (!result.ok) return { ok: false, error: result.error };
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "bulk_edit_transactions",
+            entityType: "transaction",
+            batchId: newId("bulk"),
+            toast: `Updated ${ids.length} transaction(s)`,
+            audit: {
+              action: "bulk_action",
+              entityType: "transaction",
+              summary: `Bulk edited ${ids.length} transaction(s)`,
+              metadata: { ids, patch },
+            },
+          },
+          { plan: result.plan },
+        );
+        return { ok: true };
+      },
+
+      bulkDeleteTransactions: (ids) => {
+        const next = applyBulkDelete(get().plan, ids);
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "bulk_delete_transactions",
+            entityType: "transaction",
+            batchId: newId("bulk"),
+            toast: `Deleted ${ids.length} transaction(s)`,
+            audit: {
+              action: "bulk_action",
+              entityType: "transaction",
+              summary: `Bulk deleted ${ids.length} transaction(s)`,
+              metadata: { ids },
+            },
+          },
+          { plan: next.plan },
+        );
+      },
 
       addTransfer: ({ fromAccountId, toAccountId, amountCents, date, memo }) => {
         const from = get().plan.accounts.find((a) => a.id === fromAccountId);
@@ -296,6 +536,7 @@ export const useBudgetStore = create<BudgetState>()(
         const transferId = newId("xfer");
         const outId = newId("txn");
         const inId = newId("txn");
+        const now = new Date().toISOString();
 
         const outTxn: Transaction = {
           id: outId,
@@ -310,6 +551,9 @@ export const useBudgetStore = create<BudgetState>()(
           isTransfer: true,
           transferId,
           transferPairId: inId,
+          source: "transfer",
+          createdAt: now,
+          updatedAt: now,
         };
 
         const inTxn: Transaction = {
@@ -325,15 +569,97 @@ export const useBudgetStore = create<BudgetState>()(
           isTransfer: true,
           transferId,
           transferPairId: outId,
+          source: "transfer",
+          createdAt: now,
+          updatedAt: now,
         };
 
-        set((s) => ({
-          plan: {
-            ...s.plan,
-            transactions: [outTxn, inTxn, ...s.plan.transactions],
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "add_transfer",
+            entityType: "transaction",
+            entityId: outId,
+            toast: "Transfer added",
+            audit: {
+              action: "create",
+              entityType: "transaction",
+              entityId: outId,
+              summary: `Transfer ${from?.name} → ${to?.name}`,
+            },
           },
-        }));
+          {
+            plan: {
+              ...get().plan,
+              transactions: [outTxn, inTxn, ...get().plan.transactions],
+            },
+          },
+        );
       },
+
+      undo: () => {
+        const result = applyUndo({
+          undoStack: get().undoStack,
+          redoStack: get().redoStack,
+        });
+        if (!result.ok) return { ok: false, error: result.error };
+        set((s) => ({
+          plan: result.snapshot.plan,
+          ...(result.snapshot.importBatches
+            ? { importBatches: result.snapshot.importBatches }
+            : {}),
+          undoStack: result.undoStack,
+          redoStack: result.redoStack,
+          toastMessage: `Undid ${result.entry.label}`,
+          auditEvents: [
+            auditEvent({
+              action: "undo",
+              entityType: result.entry.entityType,
+              entityId: result.entry.entityId,
+              summary: `Undo: ${result.entry.label}`,
+              metadata: { historyId: result.entry.id },
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        }));
+        return { ok: true };
+      },
+
+      redo: () => {
+        const result = applyRedo({
+          undoStack: get().undoStack,
+          redoStack: get().redoStack,
+        });
+        if (!result.ok) return { ok: false, error: result.error };
+        set((s) => ({
+          plan: result.snapshot.plan,
+          ...(result.snapshot.importBatches
+            ? { importBatches: result.snapshot.importBatches }
+            : {}),
+          undoStack: result.undoStack,
+          redoStack: result.redoStack,
+          toastMessage: `Redid ${result.entry.label}`,
+          auditEvents: [
+            auditEvent({
+              action: "redo",
+              entityType: result.entry.entityType,
+              entityId: result.entry.entityId,
+              summary: `Redo: ${result.entry.label}`,
+              metadata: { historyId: result.entry.id },
+            }),
+            ...s.auditEvents,
+          ].slice(0, 100),
+        }));
+        return { ok: true };
+      },
+
+      canUndo: () => get().undoStack.length > 0,
+      canRedo: () => get().redoStack.length > 0,
+      undoLabel: () => peekUndoLabel(get().undoStack),
+      redoLabel: () => peekRedoLabel(get().redoStack),
+      clearToast: () => set({ toastMessage: null }),
+      showToast: (message) => set({ toastMessage: message }),
 
       addTarget: ({ categoryId, type, amountCents, dueDate, notes }) => {
         const id = newId("tgt");
@@ -345,29 +671,74 @@ export const useBudgetStore = create<BudgetState>()(
           dueDate,
           notes,
         };
-        set((s) => ({
-          plan: { ...s.plan, targets: [...s.plan.targets, target] },
-        }));
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "target_add",
+            entityType: "target",
+            entityId: id,
+            audit: {
+              action: "target_change",
+              entityType: "target",
+              entityId: id,
+              summary: "Added target",
+            },
+          },
+          { plan: { ...get().plan, targets: [...get().plan.targets, target] } },
+        );
         return id;
       },
 
-      updateTarget: (id, patch) =>
-        set((s) => ({
-          plan: {
-            ...s.plan,
-            targets: s.plan.targets.map((t) =>
-              t.id === id ? { ...t, ...patch } : t,
-            ),
+      updateTarget: (id, patch) => {
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "target_edit",
+            entityType: "target",
+            entityId: id,
+            audit: {
+              action: "target_change",
+              entityType: "target",
+              entityId: id,
+              summary: "Edited target",
+            },
           },
-        })),
+          {
+            plan: {
+              ...get().plan,
+              targets: get().plan.targets.map((t) =>
+                t.id === id ? { ...t, ...patch } : t,
+              ),
+            },
+          },
+        );
+      },
 
-      deleteTarget: (id) =>
-        set((s) => ({
-          plan: {
-            ...s.plan,
-            targets: s.plan.targets.filter((t) => t.id !== id),
+      deleteTarget: (id) => {
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "target_delete",
+            entityType: "target",
+            entityId: id,
+            audit: {
+              action: "target_change",
+              entityType: "target",
+              entityId: id,
+              summary: "Deleted target",
+            },
           },
-        })),
+          {
+            plan: {
+              ...get().plan,
+              targets: get().plan.targets.filter((t) => t.id !== id),
+            },
+          },
+        );
+      },
 
       createBackup: (label, reason, importBatchId) => {
         const id = newId("bak");
@@ -436,19 +807,20 @@ export const useBudgetStore = create<BudgetState>()(
           return toCommitResult(result);
         }
 
-        set((s) => ({
-          plan: result.plan,
-          importBatches: [
-            result.batch,
-            ...s.importBatches.filter((b) => b.id !== batch.id),
-          ],
-          importRowsByBatch: {
-            ...s.importRowsByBatch,
-            [batch.id]: result.rows,
-          },
-          importPromptDismissed: true,
-          auditEvents: [
-            auditEvent({
+        const nextBatches = [
+          result.batch,
+          ...get().importBatches.filter((b) => b.id !== batch.id),
+        ];
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "import_batch",
+            entityType: "import_batch",
+            entityId: batch.id,
+            batchId: batch.id,
+            toast: `Imported ${result.batch.importedRows} transactions`,
+            audit: {
               action: "import",
               entityType: "import_batch",
               entityId: batch.id,
@@ -457,9 +829,16 @@ export const useBudgetStore = create<BudgetState>()(
                 importedRows: result.batch.importedRows,
                 duplicateRows: result.batch.duplicateRows,
               },
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
+            },
+          },
+          { plan: result.plan, importBatches: nextBatches },
+        );
+        set((s) => ({
+          importRowsByBatch: {
+            ...s.importRowsByBatch,
+            [batch.id]: result.rows,
+          },
+          importPromptDismissed: true,
         }));
         return toCommitResult(result);
       },
@@ -728,21 +1107,27 @@ export const useBudgetStore = create<BudgetState>()(
         if (!result.ok || !result.plan || !result.batch) {
           return { ok: false, error: result.error };
         }
-        set((s) => ({
-          plan: result.plan!,
-          importBatches: s.importBatches.map((b) =>
-            b.id === batchId ? result.batch! : b,
-          ),
-          auditEvents: [
-            auditEvent({
+        const nextBatches = get().importBatches.map((b) =>
+          b.id === batchId ? result.batch! : b,
+        );
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "import_reverse",
+            entityType: "import_batch",
+            entityId: batchId,
+            batchId,
+            toast: `Reversed import ${batch.fileName}`,
+            audit: {
               action: "import_reverse",
               entityType: "import_batch",
               entityId: batchId,
               summary: `Reversed import ${batch.fileName}`,
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
-        }));
+            },
+          },
+          { plan: result.plan, importBatches: nextBatches },
+        );
         return { ok: true };
       },
 
@@ -782,61 +1167,84 @@ export const useBudgetStore = create<BudgetState>()(
           importBatches: [],
           importRowsByBatch: {},
           importPromptDismissed: false,
+          undoStack: [],
+          redoStack: [],
+          toastMessage: null,
         });
       },
 
       setHydrated: (value) => set({ hydrated: value }),
 
-      updateAccount: (accountId, patch) =>
-        set((s) => ({
-          plan: applyAccountEdit(s.plan, accountId, patch),
-          auditEvents: [
-            auditEvent({
+      updateAccount: (accountId, patch) => {
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_edit",
+            entityType: "account",
+            entityId: accountId,
+            audit: {
               action: "account_edit",
               entityType: "account",
               entityId: accountId,
-              summary: `Updated account settings`,
+              summary: "Updated account settings",
               metadata: patch as Record<string, unknown>,
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
-        })),
+            },
+          },
+          { plan: applyAccountEdit(get().plan, accountId, patch) },
+        );
+      },
 
-      hideAccount: (accountId) =>
-        set((s) => ({
-          plan: hideAccountOp(s.plan, accountId),
-          auditEvents: [
-            auditEvent({
+      hideAccount: (accountId) => {
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_hide",
+            entityType: "account",
+            entityId: accountId,
+            audit: {
               action: "account_hide",
               entityType: "account",
               entityId: accountId,
               summary: "Hid account from sidebar",
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
-        })),
+            },
+          },
+          { plan: hideAccountOp(get().plan, accountId) },
+        );
+      },
 
-      unhideAccount: (accountId) =>
-        set((s) => ({
-          plan: unhideAccountOp(s.plan, accountId),
-          auditEvents: [
-            auditEvent({
+      unhideAccount: (accountId) => {
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_unhide",
+            entityType: "account",
+            entityId: accountId,
+            audit: {
               action: "account_unhide",
               entityType: "account",
               entityId: accountId,
               summary: "Unhid account",
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
-        })),
+            },
+          },
+          { plan: unhideAccountOp(get().plan, accountId) },
+        );
+      },
 
       closeAccount: (input) => {
         const result = closeAccountOp(get().plan, input);
         if (!result.ok) return { ok: false, error: result.error };
-        set((s) => ({
-          plan: result.plan,
-          auditEvents: [
-            auditEvent({
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_close",
+            entityType: "account",
+            entityId: input.accountId,
+            toast: "Account closed",
+            audit: {
               action: "account_close",
               entityType: "account",
               entityId: input.accountId,
@@ -846,110 +1254,135 @@ export const useBudgetStore = create<BudgetState>()(
                 transferToAccountId: input.transferToAccountId,
                 reason: input.reason,
               },
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
-        }));
+            },
+          },
+          { plan: result.plan },
+        );
         return { ok: true };
       },
 
       reopenAccount: (accountId, keepHidden = false) => {
         const result = reopenAccountOp(get().plan, { accountId, keepHidden });
         if (!result.ok) return { ok: false, error: result.error };
-        set((s) => ({
-          plan: result.plan,
-          auditEvents: [
-            auditEvent({
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_reopen",
+            entityType: "account",
+            entityId: accountId,
+            toast: "Account reopened",
+            audit: {
               action: "account_reopen",
               entityType: "account",
               entityId: accountId,
               summary: keepHidden
                 ? "Reopened account (kept hidden)"
                 : "Reopened account",
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
-        }));
+            },
+          },
+          { plan: result.plan },
+        );
         return { ok: true };
       },
 
       deleteAccount: (accountId) => {
         const result = deleteAccountSafe(get().plan, accountId);
         if (!result.ok) return { ok: false, error: result.error };
-        set((s) => ({
-          plan: result.plan,
-          auditEvents: [
-            auditEvent({
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_delete",
+            entityType: "account",
+            entityId: accountId,
+            toast: "Account deleted",
+            audit: {
               action: "account_delete",
               entityType: "account",
               entityId: accountId,
               summary: "Permanently deleted empty account",
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
-        }));
+            },
+          },
+          { plan: result.plan },
+        );
         return { ok: true };
       },
 
-      bulkHideAccounts: (accountIds) =>
-        set((s) => ({
-          plan: bulkSetHidden(s.plan, accountIds, true),
-          auditEvents: [
-            auditEvent({
+      bulkHideAccounts: (accountIds) => {
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_hide",
+            entityType: "account",
+            audit: {
               action: "bulk_action",
               entityType: "account",
               summary: `Hid ${accountIds.length} account(s)`,
               metadata: { accountIds, action: "hide" },
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
-        })),
+            },
+          },
+          { plan: bulkSetHidden(get().plan, accountIds, true) },
+        );
+      },
 
-      bulkUnhideAccounts: (accountIds) =>
-        set((s) => ({
-          plan: bulkSetHidden(s.plan, accountIds, false),
-          auditEvents: [
-            auditEvent({
+      bulkUnhideAccounts: (accountIds) => {
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_unhide",
+            entityType: "account",
+            audit: {
               action: "bulk_action",
               entityType: "account",
               summary: `Unhid ${accountIds.length} account(s)`,
               metadata: { accountIds, action: "unhide" },
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
-        })),
+            },
+          },
+          { plan: bulkSetHidden(get().plan, accountIds, false) },
+        );
+      },
 
       bulkCloseAccounts: (accountIds) => {
         const result = bulkCloseAccountsOp(get().plan, accountIds, true);
         if (!result.ok) return { ok: false, error: result.error };
-        set((s) => ({
-          plan: result.plan,
-          auditEvents: [
-            auditEvent({
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_close",
+            entityType: "account",
+            audit: {
               action: "bulk_action",
               entityType: "account",
               summary: `Closed ${accountIds.length} account(s)`,
               metadata: { accountIds, action: "close" },
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
-        }));
+            },
+          },
+          { plan: result.plan },
+        );
         return { ok: true };
       },
 
-      bulkReopenAccounts: (accountIds, keepHidden = false) =>
-        set((s) => ({
-          plan: bulkReopenAccountsOp(s.plan, accountIds, keepHidden),
-          auditEvents: [
-            auditEvent({
+      bulkReopenAccounts: (accountIds, keepHidden = false) => {
+        commitHistory(
+          set,
+          get,
+          {
+            actionType: "account_reopen",
+            entityType: "account",
+            audit: {
               action: "bulk_action",
               entityType: "account",
               summary: `Reopened ${accountIds.length} account(s)`,
               metadata: { accountIds, action: "reopen", keepHidden },
-            }),
-            ...s.auditEvents,
-          ].slice(0, 100),
-        })),
+            },
+          },
+          { plan: bulkReopenAccountsOp(get().plan, accountIds, keepHidden) },
+        );
+      },
 
       setShowHiddenAccounts: (value) =>
         set((s) => ({
@@ -981,6 +1414,9 @@ export const useBudgetStore = create<BudgetState>()(
         payeeAliasRules: state.payeeAliasRules,
         categoryImportRules: state.categoryImportRules,
         importPromptDismissed: state.importPromptDismissed,
+        // Persist undo/redo so history survives navigation/refresh
+        undoStack: state.undoStack.slice(-15),
+        redoStack: state.redoStack.slice(-15),
       }),
       onRehydrateStorage: () => (state) => {
         if (state?.plan) {

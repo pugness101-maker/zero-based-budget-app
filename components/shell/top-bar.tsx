@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import { formatMonthLabel, nextMonth, previousMonth } from "@/lib/dates";
 import { useBudgetStore } from "@/lib/store/budget-store";
+import { shouldHandleUndoRedoShortcut } from "@/lib/history/keyboard";
 import { cn } from "@/lib/utils";
 
 export function TopBar() {
@@ -20,6 +22,26 @@ export function TopBar() {
   const setMonth = useBudgetStore((s) => s.setMonth);
   const hideBalances = useBudgetStore((s) => s.plan.preferences.hideBalances);
   const toggleHideBalances = useBudgetStore((s) => s.toggleHideBalances);
+  const undo = useBudgetStore((s) => s.undo);
+  const redo = useBudgetStore((s) => s.redo);
+  const undoStack = useBudgetStore((s) => s.undoStack);
+  const redoStack = useBudgetStore((s) => s.redoStack);
+  const canUndo = undoStack.length > 0;
+  const canRedo = redoStack.length > 0;
+  const undoTip = undoStack[undoStack.length - 1]?.label;
+  const redoTip = redoStack[redoStack.length - 1]?.label;
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const action = shouldHandleUndoRedoShortcut(e);
+      if (!action) return;
+      e.preventDefault();
+      if (action === "undo" && canUndo) undo();
+      if (action === "redo" && canRedo) redo();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [canUndo, canRedo, undo, redo]);
 
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-surface/90 px-3 md:px-5 backdrop-blur">
@@ -54,16 +76,18 @@ export function TopBar() {
           <Search className="h-4 w-4" />
         </IconButton>
         <IconButton
-          label="Undo"
-          disabled
-          reason="Undo/redo stack ships in a later Phase 1 increment."
+          label={undoTip ? `Undo “${undoTip}”` : "Undo"}
+          disabled={!canUndo}
+          reason="Nothing to undo"
+          onClick={() => undo()}
         >
           <Undo2 className="h-4 w-4" />
         </IconButton>
         <IconButton
-          label="Redo"
-          disabled
-          reason="Undo/redo stack ships in a later Phase 1 increment."
+          label={redoTip ? `Redo “${redoTip}”` : "Redo"}
+          disabled={!canRedo}
+          reason="Nothing to redo"
+          onClick={() => redo()}
         >
           <Redo2 className="h-4 w-4" />
         </IconButton>
@@ -107,12 +131,14 @@ function IconButton({
   disabled,
   reason,
   className,
+  onClick,
 }: {
   children: React.ReactNode;
   label: string;
   disabled?: boolean;
   reason?: string;
   className?: string;
+  onClick?: () => void;
 }) {
   return (
     <button
@@ -120,6 +146,7 @@ function IconButton({
       disabled={disabled}
       title={disabled ? reason : label}
       aria-label={label}
+      onClick={onClick}
       className={cn(
         "rounded-lg p-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent",
         disabled
